@@ -1,0 +1,13 @@
+.git
+.gitlab-ci.yml
+.env
+.env.*
+docker-compose*.yml
+README.md
+dockerdesc.md
+docs/
+**/*_test.go
+tests/
+**/node_modules/
+**/dist/
+.cache/

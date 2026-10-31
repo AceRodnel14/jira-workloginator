@@ -1,0 +1,26 @@
+# Self-hosting: docker compose pull && docker compose up -d
+# Development:  docker compose up --build
+# With PostgreSQL instead of the JSON file: see docker-compose.db.yml
+services:
+  app:
+    image: ${IMAGE:-eacer/jira-workloginator:latest}
+    build: .
+    restart: unless-stopped
+    env_file:
+      - path: .env
+        required: false
+    ports:
+      - "${APP_BIND:-0.0.0.0}:${APP_PORT:-8080}:8080"
+    volumes:
+      - app-data:/data
+    # The image's HEALTHCHECK already runs (`/app healthcheck` -> /healthz).
+    # Uncomment to change its timings, or use `disable: true` to turn it off.
+    # healthcheck:
+    #   test: ["CMD", "/app", "healthcheck"]
+    #   interval: 30s
+    #   timeout: 3s
+    #   start_period: 5s
+    #   retries: 3
+
+volumes:
+  app-data:
