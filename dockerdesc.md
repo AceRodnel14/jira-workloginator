@@ -4,8 +4,10 @@
 
 A small web app that shows the hours someone logged in Jira Cloud, one week at a time:
 a Monday-to-Sunday bar chart (hover a day to split it into per-ticket segments), a
-console-style fetch log and a day-by-day list of every worklog. The worklog author can
+console-style fetch log and a day-by-day list of tickets per day. The worklog author can
 differ from the API user, so you can view other people's logs.
+`/multiple` compares up to 50 authors over one range: hours against expected workday hours,
+a day-by-day chart per month and a print/PDF export.
 
 ## Quick start
 ```yaml
@@ -19,7 +21,9 @@ services:
 volumes:
   app-data:
 ```
-`docker compose up -d`, then open `http://<host>:8080`. For HTTPS, put a reverse
+**Before the first start**, create `.env` from the variables below and set at least `BASE_URL`
+(and `LOGIN_PASS` whenever others can reach the app); then `docker compose up -d`, then open
+`http://<host>:8080`. For HTTPS, put a reverse
 proxy in front and set `BASE_URL` to the public URL.
 
 Or try it with a single `docker run` (json storage; drop `-v ...` to start empty each time):
@@ -39,8 +43,8 @@ docker run --rm -p 8080:8080 -e STORAGE=json -v jira-workloginator-data:/data ea
 
 Saved settings (Jira site, emails, API token, timezone) live in `/data/config.json`
 (plain text, protect the volume) or in Postgres: the repo's `docker-compose.db.yml` runs
-the app with a `postgres:18-alpine` container. Only `https://*.atlassian.net` sites
+the app with a `postgres:18.6-alpine3.24` container. Only `https://*.atlassian.net` sites
 are accepted. Health: `/healthz` (liveness), `/readyz` (readiness).
 
 ## Tags
-`latest`, `vX.Y`, `vX.Y.Z`. Platforms: `linux/amd64`, `linux/arm64`.
+`latest` (default, latest stable), `main` (default branch), `vX.Y`, `vX.Y.Z` (releases). Platforms: `linux/amd64`, `linux/arm64`.

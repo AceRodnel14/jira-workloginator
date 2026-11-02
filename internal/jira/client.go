@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -56,6 +57,8 @@ type Client struct {
 	email string
 	token string
 	sleep func(context.Context, time.Duration) error
+	// onRetry, when set, is told before each wait: status, wait, retry number, max retries.
+	onRetry func(status int, wait time.Duration, retry, of int)
 }
 
 // NewClient builds a client for base (https://<sub>.atlassian.net).
@@ -99,7 +102,12 @@ func (c *Client) get(ctx context.Context, path string, q url.Values, out any) er
 			if attempt >= maxRetries {
 				return httpError(resp.StatusCode, body)
 			}
-			if err := c.sleep(ctx, retryWait(resp.Header.Get("Retry-After"), attempt)); err != nil {
+			wait := retryWait(resp.Header.Get("Retry-After"), attempt)
+			slog.Warn("jira asked to retry", "host", c.host(), "status", resp.StatusCode, "wait", wait, "retry", attempt+1)
+			if c.onRetry != nil {
+				c.onRetry(resp.StatusCode, wait, attempt+1, maxRetries)
+			}
+			if err := c.sleep(ctx, wait); err != nil {
 				return err
 			}
 			continue
@@ -116,6 +124,13 @@ func (c *Client) get(ctx context.Context, path string, q url.Values, out any) er
 		}
 		return nil
 	}
+}
+
+func (c *Client) host() string {
+	if u, err := url.Parse(c.base); err == nil {
+		return u.Host
+	}
+	return ""
 }
 
 func retryWait(header string, attempt int) time.Duration {

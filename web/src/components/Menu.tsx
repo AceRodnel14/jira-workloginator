@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 
-export type MenuItem = { label: ReactNode; onClick: () => void }
+/** A button, or a normal link when `href` is set. */
+export type MenuItem = { label: ReactNode; onClick?: () => void; href?: string }
 
 /** Top-right dropdown. Closes on selection, Escape, an outside press or focus leaving it. */
 export function Menu({ label, items, ariaLabel = 'Menu' }: { label: ReactNode; items: MenuItem[]; ariaLabel?: string }) {
@@ -31,7 +32,11 @@ export function Menu({ label, items, ariaLabel = 'Menu' }: { label: ReactNode; i
       {open && (
         <div className="menu-list">
           {items.map((it, i) => (
-            <button key={i} type="button" onClick={() => { setOpen(false); it.onClick() }}>{it.label}</button>
+            it.href ? (
+              <a key={i} href={it.href}>{it.label}</a>
+            ) : (
+              <button key={i} type="button" onClick={() => { setOpen(false); it.onClick?.() }}>{it.label}</button>
+            )
           ))}
         </div>
       )}

@@ -1,4 +1,11 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
-  <style>path{fill:#1c1917}@media (prefers-color-scheme:dark){path{fill:#fff}}</style>
-  <path fill-rule="evenodd" d="M12 2 21 7v10l-9 5-9-5V7zm0 5.2L7 10v4l5 2.8 5-2.8v-4z"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48">
+  <title>Jira Workloginator</title>
+  <path d="M8 21 L20.5 6.8 L23.5 12.5 L15.5 21 Z" fill="#fff" stroke="#0052CC" stroke-width="1" stroke-linejoin="round"/>
+  <path d="M27 40 L41.2 27.5 L35.5 24.5 L27 32.5 Z" fill="#fff" stroke="#0052CC" stroke-width="1" stroke-linejoin="round"/>
+  <path fill="#2684FF" d="M5.5,22.9722h0a8.7361,8.7361,0,0,0,8.7361,8.7361h2.0556v2.0556A8.7361,8.7361,0,0,0,25.0278,42.5h0V22.9722Z"/>
+  <path fill="#2684FF" d="M22.9722,5.5h0a8.7361,8.7361,0,0,0,8.7361,8.7361h2.0556v2.0556A8.7361,8.7361,0,0,0,42.5,25.0278h0V5.5Z"/>
+  <circle cx="24" cy="24" r="9.6" fill="#fff"/>
+  <circle cx="24" cy="24" r="8.2" fill="#0052CC"/>
+  <path d="M24 17.6v1.6M30.4 24h-1.6M24 30.4v-1.6M17.6 24h1.6" stroke="#fff" stroke-width="1.4" stroke-linecap="round"/>
+  <path d="M24 19V24H28" fill="none" stroke="#fff" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/>
 </svg>

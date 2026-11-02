@@ -5,6 +5,7 @@ import { Appearance } from './components/Appearance'
 import { Login } from './components/Login'
 import { Logo } from './components/Logo'
 import { Menu } from './components/Menu'
+import { MultiWorkspace } from './components/MultiWorkspace'
 import { Workspace } from './components/Workspace'
 import { ErrorNote, Icon, Modal, Spinner, errMsg } from './components/ui'
 
@@ -12,6 +13,7 @@ export function App() {
   const [session, setSession] = useState<Session>()
   const [error, setError] = useState<string>()
   const [appearance, setAppearance] = useState(false)
+  const multi = window.location.pathname === '/multiple'
 
   const load = useCallback(() => {
     getSession().then(setSession, (e: unknown) => setError(errMsg(e)))
@@ -45,11 +47,14 @@ export function App() {
               <Icon name="logout" /> Logout
             </button>
           )}
-          <Menu label="Menu" items={[{ label: 'Appearance', onClick: () => setAppearance(true) }]} />
+          <Menu label="Menu" items={[
+              multi ? { label: 'Single user', href: '/' } : { label: 'Multiple users', href: '/multiple' },
+              { label: 'Appearance', onClick: () => setAppearance(true) },
+            ]} />
         </span>
       </header>
       <main className="page wide">
-        <Workspace onUnauthorized={toLogin} />
+        {multi ? <MultiWorkspace onUnauthorized={toLogin} /> : <Workspace onUnauthorized={toLogin} />}
       </main>
       {appearance && (
         <Modal title="Appearance" onClose={() => setAppearance(false)}>

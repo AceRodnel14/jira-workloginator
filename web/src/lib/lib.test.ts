@@ -1,7 +1,8 @@
 import { describe, expect, test } from 'vitest'
 
 import { addDays, clampWeek, mondayOf, monthDefaults, rangeDays, shortLabel, weekDays } from './dates'
-import { assignColours, daySegments, entriesByDay, formatDayList, PALETTE_SIZE, splitSegments, yMax, type Issue } from './data'
+import { assignColours, daySegments, entriesByDay, formatDayList, PALETTE_SIZE, splitSegments, taskRows, yMax, type Issue } from './data'
+import { consoleLine, logLine } from './data'
 import { validateForm } from './validate'
 
 const issue = (key: string, worklogs: Issue['worklogs'], summary = 'Title'): Issue => ({
@@ -82,11 +83,10 @@ describe('day list', () => {
     ])
     expect(formatDayList(byDay, '2026-10-01', '2026-10-03')).toEqual([
       '=== 2026-10-01, Thursday ===',
-      '09:00 - 10:30   ABC-1 Title',
-      '13:00 - 14:00   ABC-1 Title',
+      '2.50h ABC-1 Title',
       '',
       '=== 2026-10-02, Friday ===',
-      '23:30 - 00:30 (+1)   ABC-1 Title',
+      '1.00h ABC-1 Title',
       '',
       '=== 2026-10-03, Saturday ===',
       'no logs',
@@ -95,8 +95,22 @@ describe('day list', () => {
   })
 })
 
+describe('task rows', () => {
+  test('two worklogs on the same ticket and day become one summed line, in first-start order', () => {
+    const byDay = entriesByDay([
+      issue('B-2', [wl('2026-10-01', '08:00', '09:00', 3600)]),
+      issue('A-1', [wl('2026-10-01', '13:00', '14:00', 3600), wl('2026-10-01', '09:30', '10:30', 3600), wl('2026-10-01', '16:00', '16:30', 1800)]),
+    ])
+    expect(taskRows(byDay.get('2026-10-01'))).toEqual([
+      { key: 'B-2', summary: 'Title', seconds: 3600 },
+      { key: 'A-1', summary: 'Title', seconds: 9000 },
+    ])
+    expect(taskRows(undefined)).toEqual([])
+  })
+})
+
 describe('form validation', () => {
-  const ok = { jira_domain: 'https://x.atlassian.net', user: 'a@b.c', api_email: '', same_as_user: true, api_token: 't', timezone: 'Etc/UTC' }
+  const ok = { users: [] as string[], jira_domain: 'https://x.atlassian.net', user: 'a@b.c', api_email: '', same_as_user: true, api_token: 't', timezone: 'Etc/UTC' }
   test('valid', () => expect(validateForm(ok, '2026-10-01', '2026-10-31')).toEqual({}))
   test('domain rules', () => {
     for (const d of ['http://x.atlassian.net', 'https://example.com', 'https://atlassian.net', 'nope', 'https://x.atlassian.net.evil.com', 'https://x.atlassian.net:8443', 'https://u@x.atlassian.net'])
@@ -135,5 +149,14 @@ describe('split segments', () => {
     const last = segs[segs.length - 1]
     expect(last).toMatchObject({ slot: 0, repeat: true })
     expect(last.height).toBeGreaterThanOrEqual(1)
+  })
+})
+
+describe('retry lines', () => {
+  test('a rate-limit retry is neutral, other non-fatal errors stay errors', () => {
+    const retry = consoleLine({ type: 'error', msg: 'A-1: Jira answered 429 (rate limited); retrying in 5 s (retry 1 of 3)', fatal: false })!
+    expect(retry.startsWith('Retry: ')).toBe(true)
+    expect(logLine(retry)).toMatchObject({ error: false, retry: true })
+    expect(logLine(consoleLine({ type: 'error', msg: 'A-1: boom', fatal: false })!)).toMatchObject({ error: true })
   })
 })

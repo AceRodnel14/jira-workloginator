@@ -21,6 +21,10 @@ import (
 	"gitlab.com/acerodnel/jira-workloginator/internal/store"
 )
 
+// version is the release; override at build time with
+// -ldflags "-X main.version=1.2.3".
+var version = "1.0.0"
+
 // static is the embedded web UI; nil for a backend-only app (web.go sets it).
 var static fs.FS
 
@@ -67,7 +71,7 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	slog.Info("listening", "addr", srv.Addr, "base_url", cfg.BaseURL, "storage", cfg.Storage, "login", cfg.LoginPass != "")
+	slog.Info("listening", "addr", srv.Addr, "version", version, "base_url", cfg.BaseURL, "storage", cfg.Storage, "login", cfg.LoginPass != "")
 	return serve(ctx, srv, ln)
 }
 

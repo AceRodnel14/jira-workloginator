@@ -1,12 +1,13 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 
 import { getSettings, HttpError, putSettings, streamWorklogs, UnauthorizedError, type Settings, type StreamEvent } from '../api'
-import { mondayOf, monthDefaults } from '../lib/dates'
-import { consoleLine, entriesByDay, weekLine, type Issue } from '../lib/data'
+import { mondayOf, monthDefaults, rangeDays, weekDays } from '../lib/dates'
+import { assignColours, consoleLine, entriesByDay, highlightFor, logLine, weekLine, type Issue, type LogLine } from '../lib/data'
 import { validateForm, type Errors } from '../lib/validate'
 import { Console } from './Console'
 import { DayList } from './DayList'
 import { SettingsForm, type FormState } from './SettingsForm'
+import { Transition } from './Transition'
 import { WeekChart } from './WeekChart'
 import { ErrorNote, Spinner, errMsg } from './ui'
 
@@ -21,23 +22,28 @@ export function Workspace({ onUnauthorized }: { onUnauthorized: () => void }) {
   const [fetching, setFetching] = useState(false)
   const [range, setRange] = useState<Range>()
   const [issues, setIssues] = useState<Issue[]>([])
-  const [lines, setLines] = useState<string[]>([])
+  const [lines, setLines] = useState<LogLine[]>([])
   const [done, setDone] = useState(false)
+  // Why the fetch stopped before `done` (null = running or finished): the transition page stays and offers Back.
+  const [failure, setFailure] = useState<string | null>(null)
+  const [activeDay, setActiveDay] = useState<string | null>(null)
   const [monday, setMonday] = useState('')
   const [settingsOpen, setSettingsOpen] = useState(true)
   const abortRef = useRef<AbortController | null>(null)
   const cancelled = useRef(false)
   const busyRef = useRef(false)
 
-  // Warn before leaving once the app view is shown (also after a submit).
+  // Warn before leaving only while a fetch runs or results are shown.
+  const guard = fetching || done
   useEffect(() => {
+    if (!guard) return
     const h = (e: BeforeUnloadEvent) => {
       e.preventDefault()
       e.returnValue = ''
     }
     window.addEventListener('beforeunload', h)
     return () => window.removeEventListener('beforeunload', h)
-  }, [])
+  }, [guard])
 
   useEffect(() => {
     let live = true
@@ -56,7 +62,7 @@ export function Workspace({ onUnauthorized }: { onUnauthorized: () => void }) {
   }, [onUnauthorized])
 
   const byDay = useMemo(() => entriesByDay(issues), [issues])
-  const addLine = (l: string) => setLines((p) => [...p, l])
+  const addLine = (l: string) => setLines((p) => [...p, logLine(l)])
 
   async function submit() {
     if (!form || busyRef.current) return
@@ -74,6 +80,8 @@ export function Workspace({ onUnauthorized }: { onUnauthorized: () => void }) {
     setIssues([])
     setLines([])
     setDone(false)
+    setFailure(null)
+    setActiveDay(null)
     setSettingsOpen(false)
     setFetching(true)
     try {
@@ -90,6 +98,8 @@ export function Workspace({ onUnauthorized }: { onUnauthorized: () => void }) {
     }
     let sawDone = false
     let sawFatal = false
+    let fatalMsg = ''
+    let failed = ''
     const acc: Issue[] = []
     const onEvent = (e: StreamEvent) => {
       const l = consoleLine(e)
@@ -97,20 +107,32 @@ export function Workspace({ onUnauthorized }: { onUnauthorized: () => void }) {
       if (e.type === 'issue') {
         acc.push(e)
         setIssues([...acc])
-      } else if (e.type === 'error' && e.fatal) sawFatal = true
-      else if (e.type === 'done') sawDone = true
+      } else if (e.type === 'error' && e.fatal) {
+        sawFatal = true
+        fatalMsg = e.msg
+      } else if (e.type === 'done') sawDone = true
     }
     try {
       await streamWorklogs({ ...s, ...r }, onEvent, ac.signal)
-      if (!sawDone && !sawFatal) addLine('Interrupted: the connection ended before the fetch finished.')
+      if (!sawDone && !sawFatal) {
+        failed = 'Connection lost: the stream ended before the fetch finished.'
+        addLine('Interrupted: the connection ended before the fetch finished.')
+      }
     } catch (e) {
       if (e instanceof UnauthorizedError) {
         onUnauthorized()
         return
       }
-      if (isAbort(e) || cancelled.current) addLine('Cancelled.')
-      else if (!(e instanceof HttpError) && !sawDone && !sawFatal) addLine(`Interrupted: ${errMsg(e)}`)
-      else addLine(`ERROR: ${errMsg(e)}`)
+      if (isAbort(e) || cancelled.current) {
+        failed = 'Cancelled.'
+        addLine('Cancelled.')
+      } else if (!(e instanceof HttpError) && !sawDone && !sawFatal) {
+        failed = `Connection lost: ${errMsg(e)}`
+        addLine(`Interrupted: ${errMsg(e)}`)
+      } else {
+        failed = errMsg(e)
+        addLine(`ERROR: ${errMsg(e)}`)
+      }
     }
     abortRef.current = null
     busyRef.current = false
@@ -118,7 +140,7 @@ export function Workspace({ onUnauthorized }: { onUnauthorized: () => void }) {
     if (sawDone) {
       setDone(true)
       addLine(weekLine(mondayOf(r.from), entriesByDay(acc)))
-    }
+    } else setFailure(failed || fatalMsg || 'The fetch did not finish.')
   }
 
   function cancel() {
@@ -138,6 +160,11 @@ export function Workspace({ onUnauthorized }: { onUnauthorized: () => void }) {
     <SettingsForm value={form} errors={errors} fetching={fetching} centered={!range} onChange={setForm} onSubmit={() => void submit()} />
   )
   if (!range) return <div className="start">{formEl}</div>
+  if (!done) return <Transition lines={lines} failure={failure} onCancel={cancel} onBack={() => setRange(undefined)} />
+
+  const days = weekDays(monday)
+  const colours = assignColours(byDay, days)
+  const highlight = highlightFor(byDay, activeDay, colours)
 
   return (
     <div className="results">
@@ -145,26 +172,16 @@ export function Workspace({ onUnauthorized }: { onUnauthorized: () => void }) {
         <summary>Settings and date range</summary>
         {formEl}
       </details>
-      {fetching && (
-        <div className="row">
-          <span className="spinner" aria-hidden="true" /> <span role="status">Fetching...</span>
-          <button type="button" className="btn small danger" onClick={cancel}>
-            Cancel
-          </button>
-        </div>
-      )}
-      <div className={`results-grid${done ? ' with-days' : ''}`}>
+      <div className="results-grid with-days">
         <div className="results-main">
           <section className="card">
-            <WeekChart byDay={byDay} from={range.from} to={range.to} monday={monday} onWeek={changeWeek} />
+            <WeekChart byDay={byDay} from={range.from} to={range.to} monday={monday} onWeek={changeWeek} colours={colours} active={activeDay} onActive={setActiveDay} />
           </section>
           <Console lines={lines} />
         </div>
-        {done && (
-          <aside className="card days">
-            <DayList byDay={byDay} from={range.from} to={range.to} />
-          </aside>
-        )}
+        <aside className="card days">
+          <DayList byDay={byDay} days={rangeDays(range.from, range.to)} activeDay={activeDay} highlight={highlight} />
+        </aside>
       </div>
     </div>
   )

@@ -2,6 +2,7 @@ import { useState, type FormEvent } from 'react'
 
 import type { Settings } from '../api'
 import type { Errors } from '../lib/validate'
+import { ChipInput } from './ChipInput'
 import { Icon } from './ui'
 
 export type FormState = { settings: Settings; from: string; to: string }
@@ -23,11 +24,13 @@ type Props = {
   errors: Errors
   fetching: boolean
   centered: boolean
+  /** The /multiple form: a list of users and an always-editable API email. */
+  multi?: boolean
   onChange: (v: FormState) => void
   onSubmit: () => void
 }
 
-export function SettingsForm({ value, errors, fetching, centered, onChange, onSubmit }: Props) {
+export function SettingsForm({ value, errors, fetching, centered, multi, onChange, onSubmit }: Props) {
   const [reveal, setReveal] = useState(false)
   const zones = ZONES
   const s = value.settings
@@ -46,17 +49,28 @@ export function SettingsForm({ value, errors, fetching, centered, onChange, onSu
         <input className="input" type="url" placeholder="https://<domain>.atlassian.net" autoComplete="off" value={s.jira_domain} onChange={(e) => set({ jira_domain: e.target.value })} {...field('jira_domain')} />
         {err('jira_domain')}
       </label>
-      <label className="field">
-        <span className="field-label">User (email)</span>
-        <input className="input" type="email" autoComplete="off" value={s.user} onChange={(e) => set({ user: e.target.value })} {...field('user')} />
-        {err('user')}
-      </label>
+      {multi ? (
+        <div className="field">
+          <label className="field-label" htmlFor="users">Users (emails)</label>
+          <ChipInput id="users" value={s.users} onChange={(users) => set({ users })} disabled={fetching} invalid={!!errors.users} describedBy={errors.users ? 'err-users' : undefined} />
+          <span className="hint">Enter or comma adds a user; x removes.</span>
+          {err('users')}
+        </div>
+      ) : (
+        <label className="field">
+          <span className="field-label">User (email)</span>
+          <input className="input" type="email" autoComplete="off" value={s.user} onChange={(e) => set({ user: e.target.value })} {...field('user')} />
+          {err('user')}
+        </label>
+      )}
       <div className="field">
         <label className="field-label" htmlFor="api_email">API email</label>
-        <input id="api_email" className="input" type="email" autoComplete="off" disabled={s.same_as_user} value={s.same_as_user ? s.user : s.api_email} onChange={(e) => set({ api_email: e.target.value })} {...field('api_email')} />
-        <label className="check">
-          <input type="checkbox" checked={s.same_as_user} onChange={(e) => set({ same_as_user: e.target.checked })} /> Same as user
-        </label>
+        <input id="api_email" className="input" type="email" autoComplete="off" disabled={!multi && s.same_as_user} value={!multi && s.same_as_user ? s.user : s.api_email} onChange={(e) => set({ api_email: e.target.value })} {...field('api_email')} />
+        {!multi && (
+          <label className="check">
+            <input type="checkbox" checked={s.same_as_user} onChange={(e) => set({ same_as_user: e.target.checked })} /> Same as user
+          </label>
+        )}
         {err('api_email')}
       </div>
       <div className="field">

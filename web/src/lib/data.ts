@@ -1,6 +1,13 @@
 import type { StreamEvent } from '../api'
 import { addDays, rangeDays, weekdayName } from './dates'
 
+/** One console / transition-page line; errors are drawn in the error colour. */
+export type LogLine = { text: string; error: boolean; /** A Jira rate-limit retry: shown neutral/amber, not as an error. */ retry?: boolean }
+export const isErrorLine = (text: string): boolean => /^(ERROR|FATAL|WARNING|Interrupted)/.test(text)
+/** Non-fatal `error` events announcing a retry ("Jira answered 429 ...; retrying in 5 s (retry 1 of 3)"). */
+export const isRetryMsg = (msg: string): boolean => /retrying in/.test(msg)
+export const logLine = (text: string): LogLine => (text.startsWith('Retry:') ? { text, error: false, retry: true } : { text, error: isErrorLine(text) })
+
 export type Issue = Extract<StreamEvent, { type: 'issue' }>
 
 /** One worklog entry placed on its day. */
@@ -59,17 +66,44 @@ export function assignColours(byDay: Map<string, Entry[]>, days: string[]): Map<
   return new Map(keys.map((k, i) => [k, { slot: i % PALETTE_SIZE, repeat: i >= PALETTE_SIZE }]))
 }
 
-/** The day list: every day from..to with its logs (or "no logs"). */
+/** Task line on both dashboards: `<hours> <KEY> <title>`. */
+export const taskLine = (e: Pick<Entry, 'seconds' | 'key' | 'summary'>): string => `${fmtHours(e.seconds)} ${e.key} ${e.summary}`
+
+/** One row per ticket on a day: hours summed, in the order of each ticket's first start. */
+export function taskRows(entries: Entry[] | undefined): Pick<Entry, 'key' | 'summary' | 'seconds'>[] {
+  const m = new Map<string, Pick<Entry, 'key' | 'summary' | 'seconds'>>()
+  for (const e of [...(entries ?? [])].sort((a, b) => a.start.localeCompare(b.start) || a.key.localeCompare(b.key))) {
+    const r = m.get(e.key)
+    if (r) r.seconds += e.seconds
+    else m.set(e.key, { key: e.key, summary: e.summary, seconds: e.seconds })
+  }
+  return [...m.values()]
+}
+
+export const dayHeading = (d: string): string => `=== ${d}, ${weekdayName(d)} ===`
+
+/** The day list as text: every day from..to with its logs (or "no logs"). */
 export function formatDayList(byDay: Map<string, Entry[]>, from: string, to: string): string[] {
   const lines: string[] = []
   for (const d of rangeDays(from, to)) {
-    lines.push(`=== ${d}, ${weekdayName(d)} ===`)
-    const list = byDay.get(d) ?? []
+    lines.push(dayHeading(d))
+    const list = taskRows(byDay.get(d))
     if (list.length === 0) lines.push('no logs')
-    for (const e of list) lines.push(`${e.start} - ${e.end}${e.offset > 0 ? ' (+1)' : ''}   ${e.key} ${e.summary}`)
+    for (const e of list) lines.push(taskLine(e))
     lines.push('')
   }
   return lines
+}
+
+/** Hover -> highlight: the colour slot of every ticket logged on the hovered day (empty when nothing is hovered). */
+export function highlightFor(byDay: Map<string, Entry[]>, day: string | null, colours: Map<string, ColourSlot>): Map<string, ColourSlot> {
+  const m = new Map<string, ColourSlot>()
+  if (!day) return m
+  for (const e of byDay.get(day) ?? []) {
+    const c = colours.get(e.key)
+    if (c) m.set(e.key, c)
+  }
+  return m
 }
 
 /** `Week 2026-10-27 .. 2026-11-02: 37.50h` */
@@ -92,7 +126,7 @@ export function consoleLine(e: StreamEvent): string | null {
       return `[${e.index}/${e.count}] ${e.key} ${e.summary}: ${n} worklog${n === 1 ? '' : 's'}, ${fmtHours(e.seconds)}`
     }
     case 'error':
-      return `${e.fatal ? 'FATAL' : 'ERROR'}: ${e.msg}`
+      return !e.fatal && isRetryMsg(e.msg) ? `Retry: ${e.msg}` : `${e.fatal ? 'FATAL' : 'ERROR'}: ${e.msg}`
     case 'done':
       return `Done: ${e.issues} issues, ${e.worklogs} worklogs, ${fmtHours(e.seconds)}`
   }

@@ -4,12 +4,24 @@ export type Session = { login_required: boolean; authenticated: boolean }
 export type Settings = {
   jira_domain: string
   user: string
+  /** Worklog authors for /multiple; [] when none (the server never sends null). */
+  users: string[]
   api_email: string
   same_as_user: boolean
   api_token: string
   timezone: string
 }
 export type WorklogRequest = Settings & { from: string; to: string }
+/** POST /api/worklogs/multi body. */
+export type MultiRequest = {
+  jira_domain: string
+  api_email: string
+  api_token: string
+  timezone: string
+  users: string[]
+  from: string
+  to: string
+}
 
 export type Worklog = { date: string; start: string; end: string; end_day_offset: number; seconds: number }
 export type StreamEvent =
@@ -19,6 +31,20 @@ export type StreamEvent =
   | { type: 'issue'; index: number; count: number; key: string; summary: string; seconds: number; worklogs: Worklog[] }
   | { type: 'error'; msg: string; fatal: boolean }
   | { type: 'done'; issues: number; worklogs: number; seconds: number }
+
+/**
+ * Events of POST /api/worklogs/multi (NDJSON). Shared-phase events (log, issues, per-issue errors, retry lines)
+ * carry no author; user, issue, done and per-user errors carry `author` (lowercase email). The run ends with
+ * all_done, or with a fatal error that has no author. Several issue events may share a key (one per author).
+ */
+export type MultiEvent =
+  | { type: 'log'; msg: string; author?: string }
+  | { type: 'user'; author: string; display_name: string }
+  | { type: 'issues'; count: number }
+  | { type: 'issue'; author: string; index: number; count: number; key: string; summary: string; seconds: number; worklogs: Worklog[] }
+  | { type: 'error'; msg: string; fatal: boolean; author?: string }
+  | { type: 'done'; author: string; issues: number; worklogs: number; seconds: number }
+  | { type: 'all_done'; authors: number; seconds: number }
 
 /** Thrown for any 401: the UI goes back to the login page. */
 export class UnauthorizedError extends Error {
@@ -77,7 +103,8 @@ export async function logout(fetcher: typeof fetch = fetch): Promise<void> {
 export async function getSettings(fetcher: typeof fetch = fetch): Promise<Settings> {
   const res = await fetcher('/api/settings')
   if (!res.ok) throw await failure(res, 'GET /api/settings')
-  return (await res.json()) as Settings
+  const body = (await res.json()) as Settings
+  return { ...body, users: body.users ?? [] }
 }
 
 export async function putSettings(s: Settings, fetcher: typeof fetch = fetch): Promise<void> {
@@ -89,13 +116,13 @@ export async function putSettings(s: Settings, fetcher: typeof fetch = fetch): P
  * Incremental NDJSON parser: feed it decoded text chunks (which may end mid-line);
  * it returns the complete lines parsed so far and keeps the partial tail.
  */
-export function createNdjsonParser(): { push(chunk: string): StreamEvent[]; flush(): StreamEvent[] } {
+export function createNdjsonParser<T = StreamEvent>(): { push(chunk: string): T[]; flush(): T[] } {
   let buf = ''
-  const parse = (line: string, out: StreamEvent[]) => {
+  const parse = (line: string, out: T[]) => {
     const t = line.trim()
     if (!t) return
     try {
-      out.push(JSON.parse(t) as StreamEvent)
+      out.push(JSON.parse(t) as T)
     } catch {
       /* ignore a malformed line rather than killing the stream */
     }
@@ -103,7 +130,7 @@ export function createNdjsonParser(): { push(chunk: string): StreamEvent[]; flus
   return {
     push(chunk) {
       buf += chunk
-      const out: StreamEvent[] = []
+      const out: T[] = []
       let i: number
       while ((i = buf.indexOf('\n')) >= 0) {
         parse(buf.slice(0, i), out)
@@ -112,7 +139,7 @@ export function createNdjsonParser(): { push(chunk: string): StreamEvent[]; flus
       return out
     },
     flush() {
-      const out: StreamEvent[] = []
+      const out: T[] = []
       parse(buf, out)
       buf = ''
       return out
@@ -120,22 +147,13 @@ export function createNdjsonParser(): { push(chunk: string): StreamEvent[]; flus
   }
 }
 
-/**
- * POST /api/worklogs and call onEvent for every NDJSON line as it arrives.
- * Resolves when the stream ends; rejects with AbortError on cancel, UnauthorizedError on 401.
- */
-export async function streamWorklogs(
-  req: WorklogRequest,
-  onEvent: (e: StreamEvent) => void,
-  signal: AbortSignal,
-  fetcher: typeof fetch = fetch,
-): Promise<void> {
-  const res = await fetcher('/api/worklogs', { method: 'POST', headers: JSON_HEADERS, body: JSON.stringify(req), signal })
-  if (!res.ok) throw await failure(res, 'POST /api/worklogs')
+async function stream<T>(path: string, req: unknown, onEvent: (e: T) => void, signal: AbortSignal, fetcher: typeof fetch): Promise<void> {
+  const res = await fetcher(path, { method: 'POST', headers: JSON_HEADERS, body: JSON.stringify(req), signal })
+  if (!res.ok) throw await failure(res, `POST ${path}`)
   if (!res.body) throw new Error('No response body')
   const reader = res.body.getReader()
   const dec = new TextDecoder()
-  const parser = createNdjsonParser()
+  const parser = createNdjsonParser<T>()
   for (;;) {
     const { done, value } = await reader.read()
     if (done) break
@@ -143,4 +161,17 @@ export async function streamWorklogs(
   }
   for (const e of parser.push(dec.decode())) onEvent(e)
   for (const e of parser.flush()) onEvent(e)
+}
+
+/**
+ * POST /api/worklogs and call onEvent for every NDJSON line as it arrives.
+ * Resolves when the stream ends; rejects with AbortError on cancel, UnauthorizedError on 401.
+ */
+export function streamWorklogs(req: WorklogRequest, onEvent: (e: StreamEvent) => void, signal: AbortSignal, fetcher: typeof fetch = fetch): Promise<void> {
+  return stream('/api/worklogs', req, onEvent, signal, fetcher)
+}
+
+/** POST /api/worklogs/multi: same contract as streamWorklogs, with MultiEvent lines. */
+export function streamMulti(req: MultiRequest, onEvent: (e: MultiEvent) => void, signal: AbortSignal, fetcher: typeof fetch = fetch): Promise<void> {
+  return stream('/api/worklogs/multi', req, onEvent, signal, fetcher)
 }

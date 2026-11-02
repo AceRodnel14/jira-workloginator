@@ -12,7 +12,9 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"testing/fstest"
 	"time"
@@ -306,7 +308,7 @@ func TestSettingsRoundTrip(t *testing.T) {
 	s, cfg := newServer(t, nil)
 	var def settings.Settings
 	_ = json.NewDecoder(do(s, "GET", "/api/settings", "").Body).Decode(&def)
-	if def != settings.Default() {
+	if !reflect.DeepEqual(def, settings.Default()) {
 		t.Errorf("defaults: %+v", def)
 	}
 	// dates in the body are ignored, domain is trimmed, email mirrored
@@ -321,8 +323,8 @@ func TestSettingsRoundTrip(t *testing.T) {
 	}
 	var got settings.Settings
 	_ = json.NewDecoder(rec.Body).Decode(&got)
-	want := settings.Settings{JiraDomain: "https://acme.atlassian.net", User: "a@b.c", APIEmail: "a@b.c", SameAsUser: true, APIToken: "tok", Timezone: "Asia/Manila"}
-	if got != want {
+	want := settings.Settings{JiraDomain: "https://acme.atlassian.net", User: "a@b.c", APIEmail: "a@b.c", SameAsUser: true, APIToken: "tok", Timezone: "Asia/Manila", Users: []string{}}
+	if !reflect.DeepEqual(got, want) {
 		t.Errorf("got %+v", got)
 	}
 	info, err := os.Stat(cfg.JSONPath)
@@ -520,5 +522,184 @@ func TestWorklogsCancelStopsFetch(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 	if calls != 1 {
 		t.Errorf("jira calls: %d", calls)
+	}
+}
+
+// ---- multi-user page and endpoint ----
+
+const multiBody = `{"jira_domain":"https://acme.atlassian.net","api_email":"me@x.io","api_token":"SECRET-TOKEN","timezone":"Etc/UTC","users":["Ann@x.io","bob@x.io"],"from":"2026-10-01","to":"2026-10-31"}`
+
+func multiJira(w http.ResponseWriter, r *http.Request) {
+	switch {
+	case strings.HasSuffix(r.URL.Path, "/user/search"):
+		q := r.URL.Query().Get("query")
+		jsonOut(w, []map[string]string{{"accountId": "id-" + q[:3], "displayName": q, "emailAddress": q}})
+	case strings.HasSuffix(r.URL.Path, "/search/jql"):
+		jsonOut(w, map[string]any{"issues": []any{map[string]any{"key": "A-1", "fields": map[string]string{"summary": "One"}}}, "isLast": true})
+	default:
+		jsonOut(w, map[string]any{"total": 2, "worklogs": []any{
+			map[string]any{"author": map[string]string{"accountId": "id-ann"}, "started": "2026-10-01T09:00:00.000+0000", "timeSpentSeconds": 3600},
+			map[string]any{"author": map[string]string{"accountId": "id-bob"}, "started": "2026-10-01T09:00:00.000+0000", "timeSpentSeconds": 1800}}})
+	}
+}
+
+func TestMultiPageServedBySPA(t *testing.T) {
+	cfg := testConfig(t, nil)
+	static := fstest.MapFS{"index.html": {Data: []byte("<h1>app</h1>")}}
+	s, err := New(cfg, static, store.NewJSON(cfg.JSONPath))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rec := do(s, "GET", "/multiple", ""); rec.Code != 200 || rec.Body.String() != "<h1>app</h1>" {
+		t.Errorf("/multiple: %d %q", rec.Code, rec.Body)
+	}
+	rec := do(s, "GET", "/api/x", "")
+	if rec.Code != 404 || !strings.HasPrefix(rec.Header().Get("Content-Type"), "application/json") {
+		t.Errorf("/api/x: %d %v", rec.Code, rec.Header())
+	}
+}
+
+func TestSettingsUsers(t *testing.T) {
+	s, _ := newServer(t, nil)
+	if rec := do(s, "GET", "/api/settings", ""); !strings.Contains(rec.Body.String(), `"users":[]`) {
+		t.Errorf("default users: %s", rec.Body)
+	}
+	body := strings.Replace(validSettings, `"timezone"`, `"users":[" Ann@X.io ","ann@x.io",""],"timezone"`, 1)
+	if rec := do(s, "PUT", "/api/settings", body); rec.Code != 204 {
+		t.Fatalf("put: %d %s", rec.Code, rec.Body)
+	}
+	if rec := do(s, "GET", "/api/settings", ""); !strings.Contains(rec.Body.String(), `"users":["ann@x.io"]`) {
+		t.Errorf("saved users: %s", rec.Body)
+	}
+	bad := strings.Replace(validSettings, `"timezone"`, `"users":["nope"],"timezone"`, 1)
+	if rec := do(s, "PUT", "/api/settings", bad); rec.Code != 400 {
+		t.Errorf("bad user: %d", rec.Code)
+	}
+}
+
+func TestWorklogsSingleStillNeedsUser(t *testing.T) {
+	s, _ := newServer(t, nil, WithJiraClient(fakeJira(t, happyJira)))
+	body := strings.Replace(worklogBody, `"user":"a@b.c","same_as_user":true`, `"user":"","same_as_user":false,"api_email":"a@b.c"`, 1)
+	if rec := do(s, "POST", "/api/worklogs", body); rec.Code != 400 {
+		t.Errorf("%d %s", rec.Code, rec.Body)
+	}
+}
+
+func TestMultiStream(t *testing.T) {
+	s, _ := newServer(t, nil, WithJiraClient(fakeJira(t, multiJira)))
+	rec := do(s, "POST", "/api/worklogs/multi", multiBody)
+	if rec.Code != 200 || rec.Header().Get("Content-Type") != "application/x-ndjson" {
+		t.Fatalf("%d %v", rec.Code, rec.Header())
+	}
+	var types []string
+	var lastLine map[string]any
+	sc := bufio.NewScanner(rec.Body)
+	for sc.Scan() {
+		var m map[string]any
+		if err := json.Unmarshal(sc.Bytes(), &m); err != nil {
+			t.Fatalf("invalid NDJSON line %q: %v", sc.Text(), err)
+		}
+		types = append(types, m["type"].(string))
+		lastLine = m
+	}
+	if strings.Join(types, ",") != "log,user,user,log,issues,issue,issue,done,done,all_done" {
+		t.Errorf("types: %v", types)
+	}
+	if lastLine["authors"] != 2.0 || lastLine["seconds"] != 5400.0 {
+		t.Errorf("all_done: %v", lastLine)
+	}
+	if strings.Contains(rec.Body.String(), "SECRET-TOKEN") {
+		t.Error("token in stream")
+	}
+}
+
+func TestMultiValidation(t *testing.T) {
+	calls := 0
+	s, _ := newServer(t, nil, WithJiraClient(fakeJira(t, func(http.ResponseWriter, *http.Request) { calls++ })))
+	users := func(n int) string {
+		var u []string
+		for i := range n {
+			u = append(u, `"u`+strings.Repeat("x", i)+`@x.io"`)
+		}
+		return strings.Join(u, ",")
+	}
+	for name, body := range map[string]string{
+		"0 users":       strings.Replace(multiBody, `"Ann@x.io","bob@x.io"`, "", 1),
+		"blank users":   strings.Replace(multiBody, `"Ann@x.io","bob@x.io"`, `"  ",""`, 1),
+		"51 users":      strings.Replace(multiBody, `"Ann@x.io","bob@x.io"`, users(51), 1),
+		"user no @":     strings.Replace(multiBody, `"bob@x.io"`, `"bob"`, 1),
+		"bad api_email": strings.Replace(multiBody, "me@x.io", "me", 1),
+		"bad range":     strings.Replace(multiBody, `"2026-10-01"`, `"2026-11-01"`, 1),
+		"367 days":      strings.Replace(strings.Replace(multiBody, `"2026-10-01"`, `"2025-10-01"`, 1), `"2026-10-31"`, `"2026-10-02"`, 1),
+		"non-atlassian": strings.Replace(multiBody, "acme.atlassian.net", "jira.example.com", 1),
+	} {
+		t.Run(name, func(t *testing.T) {
+			rec := do(s, "POST", "/api/worklogs/multi", body)
+			if rec.Code != 400 || !strings.HasPrefix(rec.Header().Get("Content-Type"), "application/json") {
+				t.Errorf("%d %s", rec.Code, rec.Body)
+			}
+		})
+	}
+	if rec := do(s, "POST", "/api/worklogs/multi", strings.Replace(multiBody, `"Ann@x.io","bob@x.io"`, users(50), 1)); rec.Code != 200 {
+		t.Errorf("50 users: %d %s", rec.Code, rec.Body)
+	}
+	if calls == 0 {
+		t.Error("valid request never reached Jira")
+	}
+}
+
+func TestMultiAuthAndOrigin(t *testing.T) {
+	s, _ := newServer(t, map[string]string{"LOGIN_PASS": "hunter2", "BASE_URL": "https://app.example.com"},
+		WithJiraClient(fakeJira(t, multiJira)))
+	if rec := do(s, "POST", "/api/worklogs/multi", multiBody); rec.Code != 401 {
+		t.Errorf("no session: %d", rec.Code)
+	}
+	ck := login(t, s)
+	if rec := do(s, "POST", "/api/worklogs/multi", multiBody, withCookie(ck), withHeader("Origin", "https://evil.example")); rec.Code != 403 {
+		t.Errorf("cross-origin: %d", rec.Code)
+	}
+	if rec := do(s, "POST", "/api/worklogs/multi", multiBody, withCookie(ck)); rec.Code != 200 {
+		t.Errorf("with session: %d %s", rec.Code, rec.Body)
+	}
+}
+
+func TestMultiDoesNotReadStore(t *testing.T) {
+	s, cfg := newServer(t, nil, WithJiraClient(fakeJira(t, multiJira)))
+	do(s, "POST", "/api/worklogs/multi", multiBody)
+	if _, err := os.Stat(cfg.JSONPath); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("multi must not save settings: %v", err)
+	}
+}
+
+func TestMultiCancelStopsFetch(t *testing.T) {
+	started := make(chan struct{})
+	var calls atomic.Int32
+	hc := fakeJira(t, func(w http.ResponseWriter, r *http.Request) {
+		if calls.Add(1) == 1 {
+			close(started)
+		}
+		<-r.Context().Done()
+	})
+	s, _ := newServer(t, nil, WithJiraClient(hc))
+	ts := httptest.NewServer(s)
+	defer ts.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, ts.URL+"/api/worklogs/multi", strings.NewReader(multiBody))
+	req.Header.Set("Content-Type", "application/json")
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		if resp, err := ts.Client().Do(req); err == nil {
+			_, _ = io.Copy(io.Discard, resp.Body)
+			_ = resp.Body.Close()
+		}
+	}()
+	<-started
+	cancel()
+	<-done
+	time.Sleep(100 * time.Millisecond)
+	if n := calls.Load(); n != 1 {
+		t.Errorf("jira calls: %d", n)
 	}
 }

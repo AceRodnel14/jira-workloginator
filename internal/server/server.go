@@ -88,6 +88,7 @@ func (s *Server) routes(static fs.FS) http.Handler {
 	mux.HandleFunc("GET /api/settings", s.handleGetSettings)
 	mux.HandleFunc("PUT /api/settings", s.handlePutSettings)
 	mux.HandleFunc("POST /api/worklogs", s.handleWorklogs)
+	mux.HandleFunc("POST /api/worklogs/multi", s.handleWorklogsMulti)
 	mux.HandleFunc("/api/", func(w http.ResponseWriter, _ *http.Request) { writeError(w, http.StatusNotFound, "Not found.") })
 	if static != nil {
 		mux.Handle("/", spa(static))

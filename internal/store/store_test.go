@@ -5,20 +5,21 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 
 	"gitlab.com/acerodnel/jira-workloginator/internal/settings"
 )
 
 func sample() settings.Settings {
-	return settings.Settings{JiraDomain: "https://acme.atlassian.net", User: "a@b.c", SameAsUser: true, APIEmail: "a@b.c", APIToken: "tok", Timezone: "Asia/Manila"}
+	return settings.Settings{JiraDomain: "https://acme.atlassian.net", User: "a@b.c", SameAsUser: true, APIEmail: "a@b.c", APIToken: "tok", Timezone: "Asia/Manila", Users: []string{"x@y.z", "q@y.z"}}
 }
 
 func roundTrip(t *testing.T, st Store) {
 	t.Helper()
 	ctx := context.Background()
 	got, ok, err := st.Load(ctx)
-	if err != nil || ok || got != settings.Default() {
+	if err != nil || ok || !reflect.DeepEqual(got, settings.Default()) {
 		t.Fatalf("empty load: %+v %v %v", got, ok, err)
 	}
 	want := sample()
@@ -30,7 +31,7 @@ func roundTrip(t *testing.T, st Store) {
 		t.Fatal(err)
 	}
 	got, ok, err = st.Load(ctx)
-	if err != nil || !ok || got != want {
+	if err != nil || !ok || !reflect.DeepEqual(got, want) {
 		t.Fatalf("load: %+v %v %v", got, ok, err)
 	}
 }

@@ -57,6 +57,9 @@ func (s *Server) handleGetSettings(w http.ResponseWriter, r *http.Request) {
 		serverError(w, r, err)
 		return
 	}
+	if st.Users == nil { // a stored "users": null must still reach the UI as []
+		st.Users = []string{}
+	}
 	writeJSON(w, http.StatusOK, st)
 }
 
@@ -84,8 +87,8 @@ type worklogsRequest struct {
 	To   string `json:"to"`
 }
 
-// handleWorklogs streams the fetch as NDJSON, flushing every line. Validation
-// failures answer 400 before streaming starts.
+// handleWorklogs streams the single-user fetch as NDJSON. Validation failures
+// answer 400 before streaming starts.
 func (s *Server) handleWorklogs(w http.ResponseWriter, r *http.Request) {
 	var in worklogsRequest
 	if !readJSON(w, r, &in) {
@@ -96,12 +99,57 @@ func (s *Server) handleWorklogs(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	if st.User == "" { // Validate only requires it with same_as_user
+		writeError(w, http.StatusBadRequest, "User must be an email address.")
+		return
+	}
 	from, to, err := settings.ParseRange(in.From, in.To)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	slog.Debug("fetch user", "user", st.User)
+	s.stream(w, r, st, jira.Request{Users: []string{st.User}, From: from, To: to, Loc: loc}, in.From, in.To)
+}
 
+// multiRequest is the body of POST /api/worklogs/multi; it never reads the store.
+type multiRequest struct {
+	JiraDomain string   `json:"jira_domain"`
+	APIEmail   string   `json:"api_email"`
+	APIToken   string   `json:"api_token"`
+	Timezone   string   `json:"timezone"`
+	Users      []string `json:"users"`
+	From       string   `json:"from"`
+	To         string   `json:"to"`
+}
+
+// handleWorklogsMulti streams the fetch for many users (one Jira search) as NDJSON.
+func (s *Server) handleWorklogsMulti(w http.ResponseWriter, r *http.Request) {
+	var in multiRequest
+	if !readJSON(w, r, &in) {
+		return
+	}
+	st, loc, err := settings.Settings{
+		JiraDomain: in.JiraDomain, APIEmail: in.APIEmail, APIToken: in.APIToken, Timezone: in.Timezone, Users: in.Users,
+	}.Validate()
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if len(st.Users) == 0 {
+		writeError(w, http.StatusBadRequest, "At least one user is required.")
+		return
+	}
+	from, to, err := settings.ParseRange(in.From, in.To)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	s.stream(w, r, st, jira.Request{Users: st.Users, Multi: true, From: from, To: to, Loc: loc}, in.From, in.To)
+}
+
+// stream writes the NDJSON answer for req, flushing every line.
+func (s *Server) stream(w http.ResponseWriter, r *http.Request, st settings.Settings, req jira.Request, fromStr, toStr string) {
 	h := w.Header()
 	h.Set("Content-Type", "application/x-ndjson")
 	h.Set("Cache-Control", "no-store")
@@ -120,15 +168,15 @@ func (s *Server) handleWorklogs(w http.ResponseWriter, r *http.Request) {
 	if u, err := url.Parse(st.JiraDomain); err == nil {
 		host = u.Host
 	}
-	slog.Info("fetch started", "host", host, "from", in.From, "to", in.To)
-	slog.Debug("fetch user", "user", st.User)
+	slog.Info("fetch started", "host", host, "from", fromStr, "to", toStr, "users", len(req.Users))
 
 	client := jira.NewClient(s.jira, st.JiraDomain, st.APIEmail, st.APIToken)
 	var issues, logs int
-	client.Fetch(r.Context(), jira.Request{User: st.User, From: from, To: to, Loc: loc}, func(ev any) {
+	client.Fetch(r.Context(), req, func(ev any) {
 		switch e := ev.(type) {
 		case jira.Done:
-			issues, logs = e.Issues, e.Worklogs
+			issues += e.Issues
+			logs += e.Worklogs
 		case jira.Error:
 			slog.Warn("fetch error", "host", host, "fatal", e.Fatal)
 		}

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -65,7 +66,7 @@ func req(user, from, to, tz string) Request {
 	if err != nil {
 		panic(err)
 	}
-	return Request{User: user, From: f, To: t, Loc: loc}
+	return Request{Users: []string{user}, From: f, To: t, Loc: loc}
 }
 
 func last(ev []any) any { return ev[len(ev)-1] }
@@ -429,7 +430,8 @@ func TestWorklogsAcrossDST(t *testing.T) {
 			day, _ := time.Parse(dateLayout, tt.day)
 			start := time.Date(day.Year(), day.Month(), day.Day(), 0, 0, 0, 0, loc)
 			end := time.Date(day.Year(), day.Month(), day.Day()+1, 0, 0, 0, 0, loc)
-			got, err := c.worklogs(context.Background(), "A-1", "a", start, end, loc)
+			perAcct, err := c.worklogs(context.Background(), "A-1", map[string][]*author{"a": nil}, start, end, loc)
+			got := perAcct["a"]
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -443,5 +445,316 @@ func TestWorklogsAcrossDST(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// ---- multi-user pipeline ----
+
+func multiReq(from, to, tz string, users ...string) Request {
+	r := req("", from, to, tz)
+	r.Users, r.Multi = users, true
+	return r
+}
+
+func issueRow(key string) map[string]any {
+	return map[string]any{"key": key, "fields": map[string]string{"summary": "S " + key}}
+}
+
+// multiFake knows users u1@x.io, u2@x.io, u3@x.io (accounts a1..a3) and the given issues.
+func multiFake(t *testing.T, searchPages map[string]map[string]any, worklogs map[string][]any) (*fake, *Client) {
+	return newFake(t, func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/user/search"):
+			q := r.URL.Query().Get("query")
+			if q == "ghost@x.io" {
+				writeJSON(w, []jiraUser{})
+				return
+			}
+			writeJSON(w, []jiraUser{{"a" + q[1:2], "Name " + q[:2], q}})
+		case strings.HasSuffix(r.URL.Path, "/search/jql"):
+			writeJSON(w, searchPages[r.URL.Query().Get("nextPageToken")])
+		case strings.HasSuffix(r.URL.Path, "/worklog"):
+			key := strings.Split(r.URL.Path, "/")[5]
+			all := worklogs[key]
+			start, _ := strconv.Atoi(r.URL.Query().Get("startAt"))
+			end := min(start+2, len(all)) // pages of two
+			writeJSON(w, map[string]any{"total": len(all), "worklogs": all[start:end]})
+		default:
+			w.WriteHeader(404)
+		}
+	})
+}
+
+func count[T any](ev []any) []T {
+	var out []T
+	for _, e := range ev {
+		if v, ok := e.(T); ok {
+			out = append(out, v)
+		}
+	}
+	return out
+}
+
+func searches(f *fake) []*http.Request {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var out []*http.Request
+	for _, r := range f.requests {
+		if strings.HasSuffix(r.URL.Path, "/search/jql") {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+func TestMultiOneSearchSplitByAuthor(t *testing.T) {
+	f, c := multiFake(t,
+		map[string]map[string]any{
+			"":   {"issues": []any{issueRow("A-1")}, "nextPageToken": "p2"},
+			"p2": {"issues": []any{issueRow("A-2")}, "isLast": true},
+		},
+		map[string][]any{
+			// 2 tracked authors + 1 untracked, over two pages (startAt paging); A-1 fetched once.
+			"A-1": {
+				wl("a1", "2026-10-01T09:00:00.000+0000", 3600),
+				wl("zz", "2026-10-01T09:00:00.000+0000", 999),
+				wl("a2", "2026-10-02T09:00:00.000+0000", 1800),
+				wl("a1", "2026-09-30T23:59:00.000+0000", 60), // before the range: dropped
+			},
+			"A-2": {wl("a2", "2026-10-03T10:00:00.000+0000", 600)},
+		})
+	ev := collect(c, context.Background(), multiReq("2026-10-01", "2026-10-31", "Etc/UTC", "u1@x.io", "u2@x.io", "u3@x.io"))
+
+	ss := searches(f)
+	if len(ss) != 2 { // one search, two pages
+		t.Fatalf("search requests: %d", len(ss))
+	}
+	jql := ss[0].URL.Query().Get("jql")
+	want := `worklogAuthor in ("a1","a2","a3") AND worklogDate >= "2026-09-30" AND worklogDate <= "2026-11-01"`
+	if jql != want {
+		t.Errorf("jql %s", jql)
+	}
+	wlCalls := map[string]int{}
+	for _, p := range f.paths() {
+		if strings.HasSuffix(p, "/worklog") {
+			wlCalls[p]++
+		}
+	}
+	if wlCalls["/rest/api/3/issue/A-1/worklog"] != 2 || wlCalls["/rest/api/3/issue/A-2/worklog"] != 1 { // A-1: two pages
+		t.Errorf("worklog calls: %v", wlCalls)
+	}
+	is := count[Issue](ev)
+	if len(is) != 3 || is[0].Author != "u1@x.io" || is[1].Author != "u2@x.io" || is[1].Key != "A-1" || is[2].Key != "A-2" || is[2].Author != "u2@x.io" {
+		t.Fatalf("issue events: %+v", is)
+	}
+	if is[0].Seconds != 3600 || len(is[0].Worklogs) != 1 || is[0].Index != 1 || is[0].Count != 2 {
+		t.Errorf("u1 issue: %+v", is[0])
+	}
+	dn := count[Done](ev)
+	if len(dn) != 3 || dn[0].Author != "u1@x.io" || dn[0].Issues != 1 || dn[1].Issues != 2 || dn[1].Seconds != 2400 ||
+		dn[2].Author != "u3@x.io" || dn[2].Issues != 0 || dn[2].Seconds != 0 {
+		t.Errorf("done events: %+v", dn)
+	}
+	if ad, ok := last(ev).(AllDone); !ok || ad.Authors != 3 || ad.Seconds != 3600+2400 {
+		t.Errorf("last: %+v", last(ev))
+	}
+	if n := len(count[Issues](ev)); n != 1 || count[Issues](ev)[0].Count != 2 {
+		t.Errorf("issues event: %+v", count[Issues](ev))
+	}
+	for _, u := range count[User](ev) {
+		if u.Author == "" {
+			t.Errorf("user without author: %+v", u)
+		}
+	}
+}
+
+func TestMultiExactTimeFilterInZone(t *testing.T) {
+	_, c := multiFake(t,
+		map[string]map[string]any{"": {"issues": []any{issueRow("A-1")}, "isLast": true}},
+		map[string][]any{"A-1": {
+			wl("a1", "2026-09-30T16:30:00.000+0000", 60), // 10-01 00:30 Manila: in
+			wl("a1", "2026-09-30T15:59:00.000+0000", 60), // 09-30 23:59 Manila: out
+			wl("a1", "2026-10-31T16:00:00.000+0000", 60), // 11-01 00:00 Manila: out
+		}})
+	ev := collect(c, context.Background(), multiReq("2026-10-01", "2026-10-31", "Asia/Manila", "u1@x.io"))
+	is := count[Issue](ev)
+	if len(is) != 1 || len(is[0].Worklogs) != 1 || is[0].Worklogs[0].Start != "00:30" {
+		t.Errorf("%+v", is)
+	}
+}
+
+func TestMultiUnresolvedContinues(t *testing.T) {
+	f, c := multiFake(t,
+		map[string]map[string]any{"": {"issues": []any{issueRow("A-1")}, "isLast": true}},
+		map[string][]any{"A-1": {wl("a1", "2026-10-01T09:00:00.000+0000", 60)}})
+	ev := collect(c, context.Background(), multiReq("2026-10-01", "2026-10-02", "Etc/UTC", "ghost@x.io", "u1@x.io"))
+	es := count[Error](ev)
+	if len(es) != 1 || es[0].Author != "ghost@x.io" || !es[0].Fatal {
+		t.Fatalf("errors: %+v", es)
+	}
+	if ad, ok := last(ev).(AllDone); !ok || ad.Authors != 1 {
+		t.Errorf("last: %+v", last(ev))
+	}
+	if q := searches(f)[0].URL.Query().Get("jql"); strings.Contains(q, "ghost") || !strings.Contains(q, `("a1")`) {
+		t.Errorf("jql %s", q)
+	}
+}
+
+func TestMultiNoneResolved(t *testing.T) {
+	f, c := multiFake(t, nil, nil)
+	ev := collect(c, context.Background(), multiReq("2026-10-01", "2026-10-02", "Etc/UTC", "ghost@x.io"))
+	if ad, ok := last(ev).(AllDone); !ok || ad.Authors != 0 || ad.Seconds != 0 {
+		t.Errorf("last: %+v", last(ev))
+	}
+	if len(searches(f)) != 0 {
+		t.Error("search must not run")
+	}
+	if len(count[Done](ev)) != 0 {
+		t.Error("no done events expected")
+	}
+}
+
+func TestMultiSearch401IsRunFatal(t *testing.T) {
+	_, c := newFake(t, func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/search/jql") {
+			w.WriteHeader(401)
+			return
+		}
+		writeJSON(w, []jiraUser{{"a1", "N", "u1@x.io"}})
+	})
+	ev := collect(c, context.Background(), multiReq("2026-10-01", "2026-10-02", "Etc/UTC", "u1@x.io"))
+	e, ok := last(ev).(Error)
+	if !ok || !e.Fatal || e.Author != "" {
+		t.Fatalf("last: %+v", last(ev))
+	}
+	for _, x := range ev {
+		if _, bad := x.(AllDone); bad {
+			t.Error("all_done after fatal")
+		}
+	}
+}
+
+func TestMultiPerIssueErrorContinues(t *testing.T) {
+	_, c := newFake(t, func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/user/search"):
+			writeJSON(w, []jiraUser{{"a1", "N", "u1@x.io"}})
+		case strings.HasSuffix(r.URL.Path, "/search/jql"):
+			writeJSON(w, map[string]any{"issues": []any{issueRow("A-1"), issueRow("A-2")}, "isLast": true})
+		case strings.Contains(r.URL.Path, "A-1"):
+			w.WriteHeader(500)
+		default:
+			writeJSON(w, map[string]any{"total": 1, "worklogs": []any{wl("a1", "2026-10-01T09:00:00.000+0000", 60)}})
+		}
+	})
+	ev := collect(c, context.Background(), multiReq("2026-10-01", "2026-10-02", "Etc/UTC", "u1@x.io"))
+	es := count[Error](ev)
+	if len(es) != 1 || es[0].Fatal || es[0].Author != "" || !strings.HasPrefix(es[0].Msg, "A-1: ") {
+		t.Fatalf("errors: %+v", es)
+	}
+	if len(count[Issue](ev)) != 1 {
+		t.Errorf("issues: %+v", count[Issue](ev))
+	}
+	if _, ok := last(ev).(AllDone); !ok {
+		t.Errorf("last: %+v", last(ev))
+	}
+}
+
+func TestRetryLines(t *testing.T) {
+	for name, tt := range map[string]struct {
+		status int
+		header string
+		want   string
+	}{
+		"429 with Retry-After": {429, "5", "Jira answered 429 (rate limited); retrying in 5 s (retry 1 of 3)"},
+		"503 fallback wait":    {503, "", "Jira answered 503 (unavailable); retrying in 1 s (retry 1 of 3)"},
+		"capped at 30":         {429, "999", "Jira answered 429 (rate limited); retrying in 30 s (retry 1 of 3)"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			n := 0
+			_, c := newFake(t, func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path == "/rest/api/3/myself" && n == 0 {
+					n++
+					if tt.header != "" {
+						w.Header().Set("Retry-After", tt.header)
+					}
+					w.WriteHeader(tt.status)
+					return
+				}
+				switch r.URL.Path {
+				case "/rest/api/3/myself":
+					writeJSON(w, map[string]string{"accountId": "a", "displayName": "Me"})
+				case "/rest/api/3/search/jql":
+					writeJSON(w, map[string]any{"issues": []any{}, "isLast": true})
+				}
+			})
+			var slept []time.Duration
+			c.sleep = func(_ context.Context, d time.Duration) error { slept = append(slept, d); return nil }
+			ev := collect(c, context.Background(), req("me@x.io", "2026-10-01", "2026-10-02", "Etc/UTC"))
+			es := count[Error](ev)
+			if len(es) != 1 || es[0].Msg != tt.want || es[0].Fatal || es[0].Author != "" {
+				t.Fatalf("errors: %+v", es)
+			}
+			if len(slept) != 1 {
+				t.Errorf("slept %v", slept)
+			}
+			if _, ok := last(ev).(Done); !ok {
+				t.Errorf("run did not recover: %+v", last(ev))
+			}
+		})
+	}
+}
+
+// The single-user event sequence is part of the contract with the UI: no author
+// tags, no all_done, retry-free.
+func TestSingleModeGolden(t *testing.T) {
+	_, c := newFake(t, func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/rest/api/3/myself":
+			writeJSON(w, map[string]string{"accountId": "acc1", "displayName": "Me Myself"})
+		case "/rest/api/3/search/jql":
+			writeJSON(w, map[string]any{"issues": []any{issueRow("A-1"), issueRow("A-2")}, "isLast": true})
+		case "/rest/api/3/issue/A-1/worklog":
+			writeJSON(w, map[string]any{"total": 1, "worklogs": []any{wl("acc1", "2026-10-01T09:00:00.000+0000", 5400)}})
+		default:
+			writeJSON(w, map[string]any{"total": 1, "worklogs": []any{wl("other", "2026-10-01T09:00:00.000+0000", 5400)}})
+		}
+	})
+	var lines []string
+	c.Fetch(context.Background(), req("me@x.io", "2026-10-01", "2026-10-31", "Etc/UTC"), func(e any) {
+		b, _ := json.Marshal(e)
+		lines = append(lines, string(b))
+	})
+	want := strings.Join([]string{
+		`{"type":"log","msg":"Looking up the Jira user"}`,
+		`{"type":"user","display_name":"Me Myself"}`,
+		`{"type":"log","msg":"Searching issues with worklogs"}`,
+		`{"type":"issues","count":2}`,
+		`{"type":"issue","index":1,"count":2,"key":"A-1","summary":"S A-1","seconds":5400,"worklogs":[{"date":"2026-10-01","start":"09:00","end":"10:30","end_day_offset":0,"seconds":5400}]}`,
+		`{"type":"issue","index":2,"count":2,"key":"A-2","summary":"S A-2","seconds":0,"worklogs":[]}`,
+		`{"type":"done","issues":2,"worklogs":1,"seconds":5400}`,
+	}, "\n")
+	if got := strings.Join(lines, "\n"); got != want {
+		t.Errorf("got:\n%s\nwant:\n%s", got, want)
+	}
+}
+
+// The 50-user cap exists because the JQL travels in the GET URL.
+func TestSearchURLStaysUnder8KB(t *testing.T) {
+	var uriLen int
+	_, c := newFake(t, func(w http.ResponseWriter, r *http.Request) {
+		uriLen = len(r.RequestURI)
+		writeJSON(w, map[string]any{"issues": []any{}, "isLast": true})
+	})
+	accts := make([]string, 50)
+	for i := range accts {
+		accts[i] = fmt.Sprintf("%03d", i) + strings.Repeat("a", 125)
+	}
+	from, _ := time.Parse(dateLayout, "2026-10-01")
+	if _, err := c.searchIssues(context.Background(), accts, from, from); err != nil {
+		t.Fatal(err)
+	}
+	if uriLen == 0 || uriLen >= 8<<10 {
+		t.Errorf("request URI length %d, want under 8192", uriLen)
 	}
 }
