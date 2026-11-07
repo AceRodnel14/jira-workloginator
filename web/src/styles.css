@@ -158,6 +158,8 @@ section > .card + .card, section > .note + .card { margin-top: 16px; }
 .auth-card .seg { display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; }
 .seg button { height: 32px; padding: 0 14px; border: 0; border-radius: 7px; background: transparent; color: var(--muted); font: inherit; font-weight: 600; font-size: 13px; cursor: pointer; }
 .seg button.on { background: var(--surface); color: var(--accent-text); box-shadow: var(--shadow); }
+.seg button:focus-visible { outline-offset: 1px; }
+.chart-view-bar { margin-bottom: 10px; }
 .hue { -webkit-appearance: none; appearance: none; width: 100%; height: 12px; border-radius: 6px; background: linear-gradient(to right, var(--stops)); }
 .hue::-webkit-slider-thumb { -webkit-appearance: none; width: 22px; height: 22px; border-radius: 50%; background: var(--surface); border: 3px solid var(--accent); cursor: pointer; }
 .hue::-moz-range-thumb { width: 18px; height: 18px; border-radius: 50%; background: var(--surface); border: 3px solid var(--accent); cursor: pointer; }
@@ -274,6 +276,7 @@ dialog.modal { overflow: hidden; }
 .chart svg { display: block; width: 100%; height: auto; }
 .chart .grid { stroke: var(--border); stroke-width: 1; }
 .chart .axis { fill: var(--muted); font-size: 12px; }
+.chart .ref { stroke: var(--muted); stroke-dasharray: 4 4; }
 .chart .axis.dimmed { opacity: 0.45; }
 .chart .hit { fill: transparent; }
 .chart .day { outline: none; }
@@ -343,6 +346,10 @@ dialog.modal { overflow: hidden; }
 .pbar .fill.low { background: var(--amber); }
 .pbar .excess { position: absolute; inset: 0 auto 0 0; background: var(--red); opacity: 0.9; }
 .sec-bar { padding: 0 16px 14px; }
+.nw-row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 16px; margin-top: 8px; }
+.nw-text { margin: 0; font-size: 13px; color: var(--muted); }
+.nw-input { display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 600; color: var(--muted); }
+.nw-input .input { width: 80px; height: 32px; }
 .pbar-labels { display: flex; justify-content: space-between; gap: 4px 12px; flex-wrap: wrap; margin-top: 6px; font-size: 13px; color: var(--muted); font-variant-numeric: tabular-nums; }
 .pbar-labels .over { color: var(--red); font-weight: 600; }
 .mnav { display: flex; align-items: center; justify-content: center; gap: 12px; margin-bottom: 8px; }
@@ -378,5 +385,9 @@ dialog.modal { overflow: hidden; }
   .sec-body, .sec-body[hidden] { display: grid !important; }
   .user-sec { break-inside: avoid-page; margin-bottom: 12px; }
   .print-only { display: block; }
+  :root[data-print='compact'] .sec-body { display: none !important; }
+  :root[data-print='compact'] .user-sec { margin-bottom: 4px; padding-top: 6px; padding-bottom: 6px; }
+  :root[data-print='compact'] .sec-head { padding-top: 4px; padding-bottom: 4px; }
+  :root[data-print='compact'] .sec-bar { padding-bottom: 6px; }
   .chev { display: none; }
 }

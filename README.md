@@ -1,19 +1,23 @@
 # jira-workloginator
 
-A small web app that shows the hours someone logged in Jira Cloud, one week at a time.
+A small web app that shows the hours someone logged in Jira Cloud, per day or per week.
 Enter your Jira site, the worklog author's email, the API credentials and a date range.
 The app pulls the matching worklogs and shows:
 - a progress page with the fetch log while the data comes in (Jira rate-limit retries
   included), then the dashboard;
-- a Monday-to-Sunday bar chart of hours per day. Hover a bar to split it into coloured
-  per-ticket segments, with a small date and day-total label; the day list on the right scrolls to that day and colours each
-  ticket to match;
+- a chart with a **Per day / Per week** switch. **Per day** (the default) is a line chart of the
+  hours per day over the whole range, weekends shaded. **Per week** is a Monday-to-Sunday bar
+  chart: hover a bar to split it into coloured per-ticket segments, with a small date and
+  day-total label; the day list on the right scrolls to that day and colours each ticket to
+  match. It opens on the week that contains today (or the first week when today is outside the range);
 - a console-style log of the fetch progress and of each week change, below the chart;
 - a day-by-day list of the tickets worked on each day, hours summed per ticket (`hours   KEY title`).
 
 The worklog author doesn't have to be the API user: the API email and token only
 authenticate, so you can view other people's logs if your Jira account can see them.
 Times are shown in the timezone you pick (IANA name, for example `Asia/Manila`).
+**Work hours per day** (1 to 12 h, default 8) sets the dashed reference line on the charts and
+the expected hours on `/multiple`; a change applies on the next fetch.
 
 ### Several users: `/multiple`
 Open `/multiple` (or **Menu > Multiple users**) to compare up to 50 worklog authors over one
@@ -22,15 +26,18 @@ its own field here (no "Same as user"); saving on `/multiple` unticks "Same as u
 when the API email differs from the `/` author. The app runs one
 Jira search for all of them, shows the fetch log until everything is in, and then shows one
 collapsible section per author. The hours bar is always shown, also while the section is collapsed:
-- hours worked against the expected hours (Mon-Fri workdays in the range x 8; public holidays
-  are not subtracted). Weekend hours count toward the total. The bar is green, amber under
+- hours worked against the expected hours: (Mon-Fri workdays in the range - non-working days)
+  x work hours per day. Type the author's **Non-working days** (holidays, leave; whole days) on
+  their section; it updates the expected hours, percentage and sort at once, is shown in both
+  PDF exports and is reset by the next fetch. Weekend hours count toward the total. The bar is green, amber under
   50%, and above 100% the excess is drawn in red over the full green bar;
 - a line chart of hours per day, one month at a time (Prev / Next), weekends shaded;
 - the task list on the right follows the author and month you opened last.
 
 **Expand all / Collapse all** and sorting by percentage work on the sections; **Export PDF**
 opens the browser's print dialog (choose "Save as PDF") with every section expanded, in the
-current order, and every month of the range charted. The 50-author limit keeps the single
+current order, and every month of the range charted. **Export PDF (compact)** prints only each
+author's header, hours against expected and the hours bar, without the charts. The 50-author limit keeps the single
 Jira search request a safe size.
 
 ## Self-hosting

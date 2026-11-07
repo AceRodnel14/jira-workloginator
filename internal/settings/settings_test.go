@@ -54,6 +54,35 @@ func TestValidate(t *testing.T) {
 	}
 }
 
+func TestValidateWorkHours(t *testing.T) {
+	if Default().WorkHours != 8 {
+		t.Errorf("default = %d", Default().WorkHours)
+	}
+	for name, tt := range map[string]struct {
+		in   int
+		want int
+		ok   bool
+	}{
+		"missing": {0, 8, true}, "one": {1, 1, true}, "six": {6, 6, true}, "twelve": {12, 12, true},
+		"negative": {-1, 0, false}, "thirteen": {13, 0, false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			s := valid()
+			s.WorkHours = tt.in
+			got, _, err := s.Validate()
+			if (err == nil) != tt.ok {
+				t.Fatalf("err = %v, want ok=%v", err, tt.ok)
+			}
+			if !tt.ok && err.Error() != "Work hours per day must be 1 to 12." {
+				t.Errorf("err = %q", err)
+			}
+			if tt.ok && got.WorkHours != tt.want {
+				t.Errorf("got %d, want %d", got.WorkHours, tt.want)
+			}
+		})
+	}
+}
+
 func TestParseRange(t *testing.T) {
 	for name, tt := range map[string]struct {
 		from, to string

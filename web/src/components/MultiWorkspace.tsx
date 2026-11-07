@@ -23,6 +23,7 @@ export function MultiWorkspace({ onUnauthorized }: { onUnauthorized: () => void 
   const [fetching, setFetching] = useState(false)
   const [range, setRange] = useState<Range>()
   const [run, setRun] = useState<MultiState>(() => initialMulti([]))
+  const [workHours, setWorkHours] = useState(8)
   const [done, setDone] = useState(false)
   const [failure, setFailure] = useState<string | null>(null)
   const [settingsOpen, setSettingsOpen] = useState(false)
@@ -75,6 +76,7 @@ export function MultiWorkspace({ onUnauthorized }: { onUnauthorized: () => void 
     const r = { from: form.from, to: form.to }
     let acc = initialMulti(s.users)
     setRange(r)
+    setWorkHours(s.work_hours)
     setRun(acc)
     setDone(false)
     setFailure(null)
@@ -150,7 +152,7 @@ export function MultiWorkspace({ onUnauthorized }: { onUnauthorized: () => void 
         <summary>Settings and date range</summary>
         {formEl}
       </details>
-      <MultiDashboard key={`${range.from}${range.to}${run.users.length}`} from={range.from} to={range.to} users={run.users} />
+      <MultiDashboard key={`${range.from}${range.to}${run.users.length}`} from={range.from} to={range.to} users={run.users} workHours={workHours} />
     </div>
   )
 }

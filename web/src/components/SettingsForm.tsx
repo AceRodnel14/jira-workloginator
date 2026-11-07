@@ -17,6 +17,7 @@ export function timezones(): string[] {
   return zones.includes('Etc/UTC') ? zones : ['Etc/UTC', ...zones]
 }
 
+const WORK_HOURS = Array.from({ length: 12 }, (_, i) => i + 1)
 export const ZONES = timezones()
 
 type Props = {
@@ -93,6 +94,15 @@ export function SettingsForm({ value, errors, fetching, centered, multi, onChang
         </datalist>
         {err('timezone')}
       </label>
+      <div className="field">
+        <label className="field-label" htmlFor="work_hours">Work hours per day</label>
+        <select id="work_hours" className="input" value={s.work_hours} onChange={(e) => set({ work_hours: Number(e.target.value) })}>
+          {WORK_HOURS.map((h) => (
+            <option key={h} value={h}>{h} h</option>
+          ))}
+        </select>
+        <span className="hint">Used for the reference line and expected hours; applies on the next fetch.</span>
+      </div>
       <div className="grid2">
         <label className="field">
           <span className="field-label">From</span>

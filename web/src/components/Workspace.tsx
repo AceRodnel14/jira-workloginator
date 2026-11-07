@@ -1,10 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 
 import { getSettings, HttpError, putSettings, streamWorklogs, UnauthorizedError, type Settings, type StreamEvent } from '../api'
-import { mondayOf, monthDefaults, rangeDays, weekDays } from '../lib/dates'
+import { initialMonday, monthDefaults, rangeDays, weekDays } from '../lib/dates'
 import { assignColours, consoleLine, entriesByDay, highlightFor, logLine, weekLine, type Issue, type LogLine } from '../lib/data'
 import { validateForm, type Errors } from '../lib/validate'
+import { ChartViewToggle, type ChartView } from './ChartViewToggle'
 import { Console } from './Console'
+import { DayChart } from './DayChart'
 import { DayList } from './DayList'
 import { SettingsForm, type FormState } from './SettingsForm'
 import { Transition } from './Transition'
@@ -28,6 +30,9 @@ export function Workspace({ onUnauthorized }: { onUnauthorized: () => void }) {
   const [failure, setFailure] = useState<string | null>(null)
   const [activeDay, setActiveDay] = useState<string | null>(null)
   const [monday, setMonday] = useState('')
+  // The work hours the data was fetched with: changing the dropdown later has no effect until the next fetch.
+  const [workHours, setWorkHours] = useState(8)
+  const [view, setView] = useState<ChartView>('day')
   const [settingsOpen, setSettingsOpen] = useState(true)
   const abortRef = useRef<AbortController | null>(null)
   const cancelled = useRef(false)
@@ -76,7 +81,10 @@ export function Workspace({ onUnauthorized }: { onUnauthorized: () => void }) {
     cancelled.current = false
     const r = { from: form.from, to: form.to }
     setRange(r)
-    setMonday(mondayOf(r.from))
+    const start = initialMonday(r.from, r.to)
+    setMonday(start)
+    setView('day')
+    setWorkHours(s.work_hours)
     setIssues([])
     setLines([])
     setDone(false)
@@ -139,7 +147,7 @@ export function Workspace({ onUnauthorized }: { onUnauthorized: () => void }) {
     setFetching(false)
     if (sawDone) {
       setDone(true)
-      addLine(weekLine(mondayOf(r.from), entriesByDay(acc)))
+      addLine(weekLine(start, entriesByDay(acc)))
     } else setFailure(failed || fatalMsg || 'The fetch did not finish.')
   }
 
@@ -175,7 +183,14 @@ export function Workspace({ onUnauthorized }: { onUnauthorized: () => void }) {
       <div className="results-grid with-days">
         <div className="results-main">
           <section className="card">
-            <WeekChart byDay={byDay} from={range.from} to={range.to} monday={monday} onWeek={changeWeek} colours={colours} active={activeDay} onActive={setActiveDay} />
+            <div className="row between chart-view-bar">
+              <ChartViewToggle value={view} onChange={setView} />
+            </div>
+            {view === 'day' ? (
+              <DayChart byDay={byDay} days={rangeDays(range.from, range.to)} label={`${range.from} to ${range.to}`} refHours={workHours} />
+            ) : (
+              <WeekChart byDay={byDay} from={range.from} to={range.to} monday={monday} onWeek={changeWeek} colours={colours} active={activeDay} onActive={setActiveDay} refHours={workHours} />
+            )}
           </section>
           <Console lines={lines} />
         </div>

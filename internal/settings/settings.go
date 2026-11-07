@@ -22,7 +22,18 @@ type Settings struct {
 	Timezone   string `json:"timezone"`
 	// Users are the people the multi-user page fetches (lowercase emails, at most MaxUsers).
 	Users []string `json:"users"`
+	// WorkHours is the length of a working day in whole hours (1..12; 0 or missing means 8).
+	WorkHours int `json:"work_hours"`
 }
+
+// DefaultWorkHours is the work hours per day used when none is set.
+const DefaultWorkHours = 8
+
+// Bounds of the work hours per day setting.
+const (
+	minWorkHours = 1
+	maxWorkHours = 12
+)
 
 // MaxUsers is the most users one multi-user fetch may cover (the JQL stays in the GET URL).
 const MaxUsers = 50
@@ -34,7 +45,7 @@ func (e invalid) Error() string { return string(e) }
 
 // Default is what GET /api/settings returns before anything was saved.
 func Default() Settings {
-	return Settings{SameAsUser: true, Timezone: "Etc/UTC", Users: []string{}}
+	return Settings{SameAsUser: true, Timezone: "Etc/UTC", Users: []string{}, WorkHours: DefaultWorkHours}
 }
 
 // Validate checks s and returns the normalised copy (domain trimmed to scheme+host,
@@ -61,6 +72,12 @@ func (s Settings) Validate() (Settings, *time.Location, error) {
 		s.APIEmail = s.User
 	} else if !strings.Contains(s.APIEmail, "@") {
 		return Settings{}, nil, invalid("API email must be an email address.")
+	}
+	if s.WorkHours == 0 {
+		s.WorkHours = DefaultWorkHours
+	}
+	if s.WorkHours < minWorkHours || s.WorkHours > maxWorkHours {
+		return Settings{}, nil, invalid("Work hours per day must be 1 to 12.")
 	}
 	if s.APIToken == "" {
 		return Settings{}, nil, invalid("API token is required.")

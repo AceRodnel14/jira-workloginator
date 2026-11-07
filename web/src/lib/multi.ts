@@ -12,7 +12,43 @@ export function workdays(from: string, to: string): number {
     return w >= 1 && w <= 5
   }).length
 }
-export const expectedHours = (from: string, to: string): number => workdays(from, to) * WORKDAY_HOURS
+export const expectedHours = (from: string, to: string, workHours = WORKDAY_HOURS, nonWorking = 0): number => (workdays(from, to) - nonWorking) * workHours
+
+/** Non-working days typed by the user: an integer in 0..wd (empty or NaN gives 0, fractions are truncated). */
+export function clampNonWorking(raw: number | string, wd: number): number {
+  const n = typeof raw === 'string' ? (raw.trim() === '' ? NaN : Number(raw)) : raw
+  return Number.isFinite(n) ? Math.min(wd, Math.max(0, Math.trunc(n))) : 0
+}
+
+/** One edit of the non-working-days field: the committed (clamped) number, and the text to keep showing (null = show the number; '' keeps an emptied field empty while editing). */
+export function nonWorkingEdit(raw: string, wd: number): { value: number; draft: string | null } {
+  return { value: clampNonWorking(raw, wd), draft: raw.trim() === '' ? '' : null }
+}
+
+type PrintWin = { print: () => void; addEventListener: (t: 'afterprint', f: () => void) => void; removeEventListener: (t: 'afterprint', f: () => void) => void }
+
+/** Compact print: data-print=compact on the root while printing; cleared on afterprint and right after print() returns. */
+export function printCompact(win: PrintWin, root: { dataset: Record<string, string | undefined> }): void {
+  const off = () => {
+    delete root.dataset.print
+    win.removeEventListener('afterprint', off)
+  }
+  root.dataset.print = 'compact'
+  win.addEventListener('afterprint', off)
+  try {
+    win.print()
+  } finally {
+    off()
+  }
+}
+
+/** "Expected 152 h (22 workdays − 3 non-working = 19 × 8 h)"; without non-working days "Expected 176 h (22 workdays × 8 h)". */
+export function expectedText(wd: number, nonWorking: number, h: number): string {
+  const total = (wd - nonWorking) * h
+  return nonWorking > 0
+    ? `Expected ${total} h (${wd} workdays \u2212 ${nonWorking} non-working = ${wd - nonWorking} \u00d7 ${h} h)`
+    : `Expected ${total} h (${wd} workdays \u00d7 ${h} h)`
+}
 export const isWeekend = (d: string): boolean => {
   const w = parseISO(d)!.getUTCDay()
   return w === 0 || w === 6
@@ -159,5 +195,6 @@ export function multiSettingsToSave(stored: Settings, form: Settings): Settings 
     api_email: form.api_email.trim(),
     users: form.users,
     same_as_user: keep,
+    work_hours: form.work_hours,
   }
 }

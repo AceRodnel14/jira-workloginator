@@ -10,6 +10,8 @@ export type Settings = {
   same_as_user: boolean
   api_token: string
   timezone: string
+  /** Work hours per day, 1..12 (default 8): the chart reference line and the /multiple expected hours. */
+  work_hours: number
 }
 export type WorklogRequest = Settings & { from: string; to: string }
 /** POST /api/worklogs/multi body. */
@@ -100,11 +102,14 @@ export async function logout(fetcher: typeof fetch = fetch): Promise<void> {
   if (!res.ok) throw await failure(res, 'POST /api/logout')
 }
 
+/** 1..12 whole hours are kept; anything else (missing, 0, 13, 7.5) becomes the default 8. */
+export const normWorkHours = (n: unknown): number => (typeof n === 'number' && Number.isInteger(n) && n >= 1 && n <= 12 ? n : 8)
+
 export async function getSettings(fetcher: typeof fetch = fetch): Promise<Settings> {
   const res = await fetcher('/api/settings')
   if (!res.ok) throw await failure(res, 'GET /api/settings')
   const body = (await res.json()) as Settings
-  return { ...body, users: body.users ?? [] }
+  return { ...body, users: body.users ?? [], work_hours: normWorkHours(body.work_hours) }
 }
 
 export async function putSettings(s: Settings, fetcher: typeof fetch = fetch): Promise<void> {

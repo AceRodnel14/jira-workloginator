@@ -9,7 +9,7 @@ RUN npm run build
 
 FROM --platform=$BUILDPLATFORM golang:1.26-alpine3.24 AS build
 ARG TARGETOS TARGETARCH
-ARG VERSION=1.0.0
+ARG VERSION=1.1.0
 WORKDIR /src
 COPY go.mod go.sum* ./
 RUN go mod download

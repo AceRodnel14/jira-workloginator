@@ -2,12 +2,13 @@
 
 # jira-workloginator
 
-A small web app that shows the hours someone logged in Jira Cloud, one week at a time:
-a Monday-to-Sunday bar chart (hover a day to split it into per-ticket segments), a
+A small web app that shows the hours someone logged in Jira Cloud, per day or per week:
+a day-by-day line chart or a Monday-to-Sunday bar chart (hover a day to split it into per-ticket segments), a
 console-style fetch log and a day-by-day list of tickets per day. The worklog author can
 differ from the API user, so you can view other people's logs.
-`/multiple` compares up to 50 authors over one range: hours against expected workday hours,
-a day-by-day chart per month and a print/PDF export.
+`/multiple` compares up to 50 authors over one range: hours against expected workday hours
+(configurable work hours per day, non-working days per author), a day-by-day chart per month and
+full or compact print/PDF export.
 
 ## Quick start
 ```yaml

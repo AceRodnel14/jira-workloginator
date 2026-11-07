@@ -1,26 +1,29 @@
 import { useId, useState } from 'react'
 
-import { fmtHours, hours, weekSeconds, yMax, type Entry } from '../lib/data'
-import { shortLabel } from '../lib/dates'
+import type { Entry } from '../lib/data'
 import {
-  barWidths, entriesOf, expectedHours, hoursState, isWeekend, monthDays, monthLabel, monthsOf, nextSort, pageMonth, percent, sortByPercent,
+  barWidths, entriesOf, expectedHours, expectedText, hoursState, monthDays, monthLabel, monthsOf, nextSort, nonWorkingEdit, printCompact, pageMonth, percent, sortByPercent,
   totalHours, workdays, WORKDAY_HOURS, type SortMode, type UserState,
 } from '../lib/multi'
+import { DayChart } from './DayChart'
 import { DayList } from './DayList'
 import { ErrorNote } from './ui'
 
-type Row = { u: UserState; byDay: Map<string, Entry[]>; total: number; pct: number | null }
+type Row = { u: UserState; byDay: Map<string, Entry[]>; total: number; pct: number | null; nonWorking: number; expected: number }
 
 const SORT_LABEL: Record<SortMode, string> = { entered: 'Order: entered', asc: 'Sort by %: low to high', desc: 'Sort by %: high to low' }
 
-export function MultiDashboard({ from, to, users }: { from: string; to: string; users: UserState[] }) {
+/** workHours is the value the data was fetched with. Non-working days are per user, not persisted, and reset with a new fetch (this component is remounted). */
+export function MultiDashboard({ from, to, users, workHours = WORKDAY_HOURS }: { from: string; to: string; users: UserState[]; workHours?: number }) {
   const wd = workdays(from, to)
-  const expected = expectedHours(from, to)
+  const [nonWorking, setNonWorking] = useState<Record<string, number>>({})
   const months = monthsOf(from, to)
   const base: Row[] = users.map((u) => {
     const byDay = entriesOf(u)
     const total = totalHours(byDay, from, to)
-    return { u, byDay, total, pct: u.error ? null : percent(total, expected) }
+    const nw = nonWorking[u.author] ?? 0
+    const expected = expectedHours(from, to, workHours, nw)
+    return { u, byDay, total, nonWorking: nw, expected, pct: u.error ? null : percent(total, expected) }
   })
   const [sort, setSort] = useState<SortMode>('entered')
   const rows = sortByPercent(base, sort)
@@ -49,7 +52,7 @@ export function MultiDashboard({ from, to, users }: { from: string; to: string; 
           <span><span className="muted">From:</span> <strong>{from}</strong></span>
           <span><span className="muted">To:</span> <strong>{to}</strong></span>
           <span>
-            <span className="muted">Workdays:</span> <strong>{wd}</strong> ({wd} x {WORKDAY_HOURS} h)
+            <span className="muted">Workdays:</span> <strong>{wd}</strong> ({wd} × {workHours} h)
           </span>
         </div>
         <div className="row toolbar no-print">
@@ -59,6 +62,7 @@ export function MultiDashboard({ from, to, users }: { from: string; to: string; 
             {SORT_LABEL[sort]}
           </button>
           <button type="button" className="btn small push" onClick={() => window.print()}>Export PDF</button>
+          <button type="button" className="btn small" onClick={() => printCompact(window, document.documentElement)}>Export PDF (compact)</button>
         </div>
         {rows.map((r) => (
           <Section
@@ -66,7 +70,9 @@ export function MultiDashboard({ from, to, users }: { from: string; to: string; 
             row={r}
             from={from}
             to={to}
-            expected={expected}
+            wd={wd}
+            workHours={workHours}
+            onNonWorking={(n) => setNonWorking({ ...nonWorking, [r.u.author]: n })}
             months={months}
             monthIndex={idxOf(r.u.author)}
             onMonth={(d) => setMonthIdx({ ...monthIdx, [r.u.author]: pageMonth(idxOf(r.u.author), d, months.length) })}
@@ -91,7 +97,9 @@ type SectionProps = {
   row: Row
   from: string
   to: string
-  expected: number
+  wd: number
+  workHours: number
+  onNonWorking: (n: number) => void
   months: string[]
   monthIndex: number
   onMonth: (delta: number) => void
@@ -100,9 +108,13 @@ type SectionProps = {
   onToggle: () => void
 }
 
-function Section({ row, from, to, expected, months, monthIndex, onMonth, open, selected, onToggle }: SectionProps) {
+function Section({ row, from, to, wd, workHours, onNonWorking, months, monthIndex, onMonth, open, selected, onToggle }: SectionProps) {
   const id = useId()
-  const { u, byDay, total, pct } = row
+  const { u, byDay, total, pct, expected, nonWorking } = row
+  const inputId = useId()
+  const textId = useId()
+  // While editing, the typed text is kept (an empty field stays empty); blur shows the committed number again.
+  const [draft, setDraft] = useState<string | null>(null)
   const state = hoursState(pct)
   return (
     <section className={`card user-sec${selected ? ' selected' : ''}${open ? ' open' : ''}`}>
@@ -129,6 +141,29 @@ function Section({ row, from, to, expected, months, monthIndex, onMonth, open, s
       {!u.error && (
         <div className="sec-bar">
           <ProgressBar total={total} expected={expected} pct={pct} state={state} />
+          <div className="nw-row">
+            <p id={textId} className="nw-text">{expectedText(wd, nonWorking, workHours)}</p>
+            <div className="nw-input no-print">
+              <label htmlFor={inputId}>Non-working days</label>
+              <input
+                id={inputId}
+                className="input"
+                type="number"
+                inputMode="numeric"
+                min={0}
+                max={wd}
+                step={1}
+                value={draft ?? nonWorking}
+                aria-describedby={textId}
+                onChange={(e) => {
+                  const edit = nonWorkingEdit(e.target.value, wd)
+                  onNonWorking(edit.value)
+                  setDraft(edit.draft)
+                }}
+                onBlur={() => setDraft(null)}
+              />
+            </div>
+          </div>
         </div>
       )}
       <div id={id} className="sec-body" hidden={!open}>
@@ -144,14 +179,14 @@ function Section({ row, from, to, expected, months, monthIndex, onMonth, open, s
                   <span className="lbl" aria-live="polite">{monthLabel(months[monthIndex])}</span>
                   <button type="button" className="btn small" disabled={monthIndex === months.length - 1} onClick={() => onMonth(1)}>Next ›</button>
                 </div>
-                <MonthChart byDay={byDay} month={months[monthIndex]} from={from} to={to} />
+                <DayChart byDay={byDay} days={monthDays(months[monthIndex], from, to)} label={monthLabel(months[monthIndex])} refHours={workHours} />
               </div>
               {/* Print: every month of the range, stacked. */}
               <div className="print-only">
                 {months.map((m) => (
                   <div key={m} className="print-month">
                     <strong>{monthLabel(m)}</strong>
-                    <MonthChart byDay={byDay} month={m} from={from} to={to} />
+                    <DayChart byDay={byDay} days={monthDays(m, from, to)} label={monthLabel(m)} refHours={workHours} />
                   </div>
                 ))}
               </div>
@@ -185,69 +220,6 @@ export function ProgressBar({ total, expected, pct, state }: { total: number; ex
         {over > 0 ? <span className="over">+{over.toFixed(1)} h over{pct !== null && ` (+${(pct - 100).toFixed(1)}%)`}</span> : <span>{Math.max(0, expected - total).toFixed(1)} h remaining</span>}
         <span>expected {expected} h</span>
       </div>
-    </div>
-  )
-}
-
-const W = 640
-const H = 230
-const M = { top: 12, right: 12, bottom: 26, left: 34 }
-
-/** Line chart of the hours per day of one month (days inside the range only); weekends shaded, real hours plotted. */
-export function MonthChart({ byDay, month, from, to }: { byDay: Map<string, Entry[]>; month: string; from: string; to: string }) {
-  const [hover, setHover] = useState<number | null>(null)
-  const days = monthDays(month, from, to)
-  const pts = days.map((d) => ({ d, h: hours(weekSeconds(byDay, [d])) }))
-  const max = yMax(byDay, days)
-  const step = max > 20 ? 4 : 2
-  const ticks = Array.from({ length: Math.floor(max / step) + 1 }, (_, i) => i * step)
-  const n = Math.max(1, days.length - 1)
-  const x = (i: number) => M.left + (days.length === 1 ? (W - M.left - M.right) / 2 : (i / n) * (W - M.left - M.right))
-  const y = (h: number) => M.top + (1 - h / max) * (H - M.top - M.bottom)
-  const bw = (W - M.left - M.right) / Math.max(1, days.length)
-  const path = pts.map((p, i) => `${i ? 'L' : 'M'}${x(i).toFixed(1)} ${y(p.h).toFixed(1)}`).join(' ')
-  const labelEvery = Math.ceil(days.length / 10)
-  const peak = pts.reduce((a, p) => (p.h > a.h ? p : a), pts[0])
-  const summary = `Hours per day, ${monthLabel(month)}: ${pts.reduce((a, p) => a + p.h, 0).toFixed(1)} h in total, busiest day ${shortLabel(peak.d)} with ${fmtHours(peak.h * 3600)}`
-  const hp = hover === null ? null : pts[hover]
-  return (
-    <div className="lc-wrap">
-      <svg viewBox={`0 0 ${W} ${H}`} role="img" aria-label={summary} className="lc">
-        {ticks.map((t) => (
-          <g key={t}>
-            <line className="grid" x1={M.left} x2={W - M.right} y1={y(t)} y2={y(t)} />
-            <text className="axis" x={M.left - 6} y={y(t)} textAnchor="end" dominantBaseline="middle">{t}</text>
-          </g>
-        ))}
-        {pts.map((p, i) => isWeekend(p.d) && <rect key={p.d} className="wk" x={x(i) - bw / 2} y={M.top} width={bw} height={H - M.top - M.bottom} />)}
-        <line className="ref" x1={M.left} x2={W - M.right} y1={y(8)} y2={y(8)} />
-        <text className="axis" x={W - M.right} y={y(8) - 4} textAnchor="end">8 h</text>
-        <path className="area" d={`${path} L${x(pts.length - 1)} ${y(0)} L${x(0)} ${y(0)}Z`} />
-        <path className="line" d={path} />
-        {pts.map((p, i) => p.h > 0 && <circle key={p.d} className="dot" cx={x(i)} cy={y(p.h)} r={2.6} />)}
-        {pts.map((p, i) => (i % labelEvery === 0 || i === pts.length - 1) && (
-          <text key={p.d} className="axis" x={x(i)} y={H - 8} textAnchor="middle">{+p.d.slice(8)}</text>
-        ))}
-        {hp && <circle className="focus" cx={x(hover!)} cy={y(hp.h)} r={5} />}
-        {pts.map((p, i) => (
-          <rect
-            key={p.d}
-            className="hit"
-            x={x(i) - bw / 2}
-            y={M.top}
-            width={bw}
-            height={H - M.top - M.bottom}
-            onMouseEnter={() => setHover(i)}
-            onMouseLeave={() => setHover((h) => (h === i ? null : h))}
-          />
-        ))}
-      </svg>
-      {hp && (
-        <div className="tooltip" role="tooltip" style={{ left: `${Math.min(85, Math.max(15, (x(hover!) / W) * 100))}%` }}>
-          <strong>{shortLabel(hp.d)}</strong>
-          <div className="tt-row"><span className="tt-text">Hours</span><span className="tt-h">{fmtHours(hp.h * 3600)}</span></div>
-        </div>
-      )}
     </div>
   )
 }

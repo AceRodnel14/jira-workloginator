@@ -60,6 +60,9 @@ func (s *Server) handleGetSettings(w http.ResponseWriter, r *http.Request) {
 	if st.Users == nil { // a stored "users": null must still reach the UI as []
 		st.Users = []string{}
 	}
+	if st.WorkHours == 0 { // a config saved before the setting existed
+		st.WorkHours = settings.DefaultWorkHours
+	}
 	writeJSON(w, http.StatusOK, st)
 }
 

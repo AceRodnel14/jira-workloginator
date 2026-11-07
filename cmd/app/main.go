@@ -23,7 +23,7 @@ import (
 
 // version is the release; override at build time with
 // -ldflags "-X main.version=1.2.3".
-var version = "1.0.0"
+var version = "1.1.0"
 
 // static is the embedded web UI; nil for a backend-only app (web.go sets it).
 var static fs.FS

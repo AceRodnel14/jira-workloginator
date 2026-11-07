@@ -1,5 +1,20 @@
 # Changelog
 
+## 1.1.0
+
+- `/`: the chart has a **Per day / Per week** switch. **Per day** (the default after each fetch) is one line chart
+  of hours per day over the whole range, also for ranges longer than a month (weekends shaded, reference line,
+  hover for the day total). **Per week** is the existing Monday-to-Sunday bar chart with per-ticket segments.
+- `/`: Per week opens on the week that contains today when today is in the range, otherwise on the first week.
+- New setting **Work hours per day** (1 to 12 h, default 8; saved with the other settings, applied on the next
+  fetch). It moves the reference line on every chart and sets the expected hours on `/multiple`. Settings saved
+  before this release load as 8. `PUT /api/settings` and `POST /api/worklogs` reject values outside 1..12 (400).
+- `/multiple`: a **Non-working days** field per author (whole days, not saved, reset on each fetch). Expected hours
+  become (workdays - non-working days) x work hours, shown as e.g. "Expected 152 h (22 workdays − 3 non-working =
+  19 × 8 h)" on screen and in both PDF exports; percent, bar colour and sorting follow it.
+- `/multiple`: new **Export PDF (compact)**: each author's header, hours against expected and the hours bar, without
+  the day charts, so many authors fit on a page. **Export PDF** is unchanged.
+
 ## 1.0.0
 
 First major release: a lot changed at once, some of it breaking for existing setups.

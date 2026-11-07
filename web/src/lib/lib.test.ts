@@ -1,6 +1,6 @@
-import { describe, expect, test } from 'vitest'
+import { describe, expect, test, vi } from 'vitest'
 
-import { addDays, clampWeek, mondayOf, monthDefaults, rangeDays, shortLabel, weekDays } from './dates'
+import { addDays, clampWeek, initialMonday, localToday, mondayOf, monthDefaults, rangeDays, shortLabel, weekDays } from './dates'
 import { assignColours, daySegments, entriesByDay, formatDayList, PALETTE_SIZE, splitSegments, taskRows, yMax, type Issue } from './data'
 import { consoleLine, logLine } from './data'
 import { validateForm } from './validate'
@@ -110,7 +110,7 @@ describe('task rows', () => {
 })
 
 describe('form validation', () => {
-  const ok = { users: [] as string[], jira_domain: 'https://x.atlassian.net', user: 'a@b.c', api_email: '', same_as_user: true, api_token: 't', timezone: 'Etc/UTC' }
+  const ok = { users: [] as string[], jira_domain: 'https://x.atlassian.net', user: 'a@b.c', api_email: '', same_as_user: true, api_token: 't', timezone: 'Etc/UTC', work_hours: 8 }
   test('valid', () => expect(validateForm(ok, '2026-10-01', '2026-10-31')).toEqual({}))
   test('domain rules', () => {
     for (const d of ['http://x.atlassian.net', 'https://example.com', 'https://atlassian.net', 'nope', 'https://x.atlassian.net.evil.com', 'https://x.atlassian.net:8443', 'https://u@x.atlassian.net'])
@@ -158,5 +158,32 @@ describe('retry lines', () => {
     expect(retry.startsWith('Retry: ')).toBe(true)
     expect(logLine(retry)).toMatchObject({ error: false, retry: true })
     expect(logLine(consoleLine({ type: 'error', msg: 'A-1: boom', fatal: false })!)).toMatchObject({ error: true })
+  })
+})
+
+describe('initial week', () => {
+  // 2026-10-26 is a Monday, 2026-11-01 a Sunday
+  test('today before from -> week of from', () => expect(initialMonday('2026-10-14', '2026-10-31', '2026-10-01')).toBe('2026-10-12'))
+  test('today == from', () => expect(initialMonday('2026-10-14', '2026-10-31', '2026-10-14')).toBe('2026-10-12'))
+  test('today mid-range -> week of today', () => expect(initialMonday('2026-10-01', '2026-10-31', '2026-10-21')).toBe('2026-10-19'))
+  test('today == to on a Sunday', () => expect(initialMonday('2026-10-01', '2026-11-01', '2026-11-01')).toBe('2026-10-26'))
+  test('today after to -> week of from', () => expect(initialMonday('2026-10-01', '2026-10-31', '2026-11-05')).toBe('2026-09-28'))
+  test('range starting mid-week, today in its first week', () => expect(initialMonday('2026-10-14', '2026-10-31', '2026-10-15')).toBe('2026-10-12'))
+  test('defaults to the local today', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date(2026, 9, 21, 12))
+    expect(initialMonday('2026-10-01', '2026-10-31')).toBe('2026-10-19')
+    vi.useRealTimers()
+  })
+})
+
+describe('localToday', () => {
+  test('uses local calendar fields near midnight', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date(2026, 9, 31, 23, 59, 30))
+    expect(localToday()).toBe('2026-10-31')
+    vi.setSystemTime(new Date(2026, 10, 1, 0, 0, 30))
+    expect(localToday()).toBe('2026-11-01')
+    vi.useRealTimers()
   })
 })

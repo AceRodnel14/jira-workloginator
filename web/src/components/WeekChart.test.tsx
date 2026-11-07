@@ -40,3 +40,11 @@ test('small date + total popup (no ticket list); the active day is split per tic
   expect(html).toContain('seg s0')
   expect(html).not.toContain('bar solid')
 })
+
+test('refHours 6 draws a "6 h" reference line and no "8 h"', () => {
+  const html = renderToStaticMarkup(
+    <WeekChart byDay={byDay} from="2026-10-01" to="2026-10-31" monday={MON} onWeek={() => {}} colours={assignColours(byDay, weekDays(MON))} active={null} onActive={() => {}} refHours={6} />,
+  )
+  expect(html).toContain('>6 h<')
+  expect(html).not.toContain('>8 h<')
+})

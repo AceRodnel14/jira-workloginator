@@ -4,7 +4,7 @@ import type { MultiEvent, Settings } from '../api'
 import { entriesByDay, taskLine, type Issue } from './data'
 import {
   barWidths, entriesOf, expectedHours, hoursState, initialMulti, monthDays, monthLabel, monthsOf, multiReducer, multiStatus, nextSort, pageMonth, percent,
-  sortByPercent, totalHours, workdays, multiApiEmail, multiSettingsToSave, type MultiState,
+  sortByPercent, clampNonWorking, expectedText, nonWorkingEdit, totalHours, workdays, multiApiEmail, multiSettingsToSave, type MultiState,
 } from './multi'
 import { addEmails, chipKeyAction, MAX_USERS, validateForm } from './validate'
 
@@ -171,14 +171,14 @@ describe('chip input logic', () => {
     expect(addEmails(full, 'U0@x.com').error).toBeNull()
   })
   test('multi form validation: users required, api email always required', () => {
-    const s = { jira_domain: 'https://x.atlassian.net', user: '', users: [] as string[], api_email: '', same_as_user: false, api_token: 't', timezone: 'Etc/UTC' }
+    const s = { jira_domain: 'https://x.atlassian.net', user: '', users: [] as string[], api_email: '', same_as_user: false, api_token: 't', timezone: 'Etc/UTC', work_hours: 8 }
     expect(Object.keys(validateForm(s, '2026-10-01', '2026-10-02', true)).sort()).toEqual(['api_email', 'users'])
     expect(validateForm({ ...s, users: ['a@x.com'], api_email: 'me@x.com' }, '2026-10-01', '2026-10-02', true)).toEqual({})
   })
 })
 
 describe('/multiple settings rules', () => {
-  const doc = (p: Partial<Settings> = {}): Settings => ({ jira_domain: ' https://x.atlassian.net ', user: 'me@x.com', users: ['a@x.com'], api_email: '', same_as_user: false, api_token: 't', timezone: 'Etc/UTC', ...p })
+  const doc = (p: Partial<Settings> = {}): Settings => ({ jira_domain: ' https://x.atlassian.net ', user: 'me@x.com', users: ['a@x.com'], api_email: '', same_as_user: false, api_token: 't', timezone: 'Etc/UTC', work_hours: 8, ...p })
   test('prefill: stored api_email; falls back to user only when same_as_user; empty otherwise', () => {
     expect(multiApiEmail(doc({ api_email: 'api@x.com', same_as_user: true }))).toBe('api@x.com')
     expect(multiApiEmail(doc({ same_as_user: true }))).toBe('me@x.com')
@@ -202,5 +202,53 @@ describe('/multiple settings rules', () => {
     expect(validateForm(f, '2026-10-01', '2026-10-02', true).api_email).toBeTruthy()
     expect(validateForm({ ...f, api_email: 'nope' }, '2026-10-01', '2026-10-02', true).api_email).toBeTruthy()
     expect(validateForm({ ...f, jira_domain: 'https://x.atlassian.net', api_email: 'ok@x.com' }, '2026-10-01', '2026-10-02', true)).toEqual({})
+  })
+})
+
+describe('work hours and non-working days', () => {
+  // 2026-11-02..2026-11-30 = 21 workdays
+  test('expectedHours with work hours and non-working days', () => {
+    expect(workdays('2026-11-02', '2026-11-30')).toBe(21)
+    expect(expectedHours('2026-11-02', '2026-11-30', 1)).toBe(21)
+    expect(expectedHours('2026-11-02', '2026-11-30', 8)).toBe(168)
+    expect(expectedHours('2026-11-02', '2026-11-30', 12)).toBe(252)
+    expect(expectedHours('2026-11-02', '2026-11-30', 6, 3)).toBe(108)
+    expect(expectedHours('2026-11-02', '2026-11-30', 8, 21)).toBe(0)
+  })
+  test('clampNonWorking', () => {
+    expect(clampNonWorking(-1, 22)).toBe(0)
+    expect(clampNonWorking(2.7, 22)).toBe(2)
+    expect(clampNonWorking(NaN, 22)).toBe(0)
+    expect(clampNonWorking('', 22)).toBe(0)
+    expect(clampNonWorking(30, 22)).toBe(22)
+    expect(clampNonWorking('5', 22)).toBe(5)
+  })
+  test('expectedText', () => {
+    expect(expectedText(22, 3, 8)).toBe('Expected 152 h (22 workdays \u2212 3 non-working = 19 \u00d7 8 h)')
+    expect(expectedText(22, 0, 8)).toBe('Expected 176 h (22 workdays \u00d7 8 h)')
+  })
+  test('all days non-working: expected 0 gives no percent', () => {
+    expect(percent(5, expectedHours('2026-11-02', '2026-11-30', 8, 21))).toBeNull()
+  })
+  test('multiSettingsToSave carries work_hours from the form', () => {
+    const base = { jira_domain: 'https://x.atlassian.net', user: 'me@x.com', users: ['a@x.com'], api_email: '', same_as_user: false, api_token: 't', timezone: 'Etc/UTC' }
+    expect(multiSettingsToSave({ ...base, work_hours: 8 }, { ...base, work_hours: 6 }).work_hours).toBe(6)
+  })
+})
+
+describe('non-working input and per-user sort', () => {
+  test('nonWorkingEdit clamps; an emptied field keeps an empty draft', () => {
+    expect(nonWorkingEdit('99', 22)).toEqual({ value: 22, draft: null })
+    expect(nonWorkingEdit('2.7', 22)).toEqual({ value: 2, draft: null })
+    expect(nonWorkingEdit('-2', 22)).toEqual({ value: 0, draft: null })
+    expect(nonWorkingEdit('', 22)).toEqual({ value: 0, draft: '' })
+    expect(nonWorkingEdit('3', 22)).toEqual({ value: 3, draft: null })
+  })
+  test('each user is sorted by percent of their own expected hours', () => {
+    const row = (name: string, total: number, nw: number) => ({ name, pct: percent(total, expectedHours('2026-10-26', '2026-10-30', 6, nw)) })
+    // a: 20 h of 30 = 66.7%, bob: 46 h of 30 = 153.3%
+    expect(sortByPercent([row('bob', 46, 0), row('a', 20, 0)], 'asc').map((r) => r.name)).toEqual(['a', 'bob'])
+    // a with 4 non-working days: 20 h of 6 = 333.3%, now above bob
+    expect(sortByPercent([row('a', 20, 4), row('bob', 46, 0)], 'asc').map((r) => r.name)).toEqual(['bob', 'a'])
   })
 })

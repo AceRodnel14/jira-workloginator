@@ -19,12 +19,14 @@ type Props = {
   /** The hovered or focused day (its bar is split per ticket and the day list highlights it). */
   active: string | null
   onActive: (day: string | null) => void
+  /** Work hours per day: the dashed reference line. */
+  refHours?: number
 }
 
-export function WeekChart({ byDay, from, to, monday, onWeek, colours, active, onActive }: Props) {
+export function WeekChart({ byDay, from, to, monday, onWeek, colours, active, onActive, refHours = 8 }: Props) {
   const days = weekDays(monday)
-  const max = yMax(byDay, days)
-  const step = max > 20 ? 4 : 2
+  const max = yMax(byDay, days, refHours)
+  const step = max > 20 ? 4 : max <= 6 ? 1 : 2
   const ticks = Array.from({ length: Math.floor(max / step) + 1 }, (_, i) => i * step)
   const slot = PW / 7
   const barW = Math.min(56, slot * 0.6)
@@ -57,6 +59,8 @@ export function WeekChart({ byDay, from, to, monday, onWeek, colours, active, on
               </text>
             </g>
           ))}
+          <line className="ref" x1={M.left} x2={W - M.right} y1={y(refHours)} y2={y(refHours)} />
+          <text className="axis" x={W - M.right} y={y(refHours) - 4} textAnchor="end">{refHours} h</text>
           <text className="axis" x={4} y={M.top - 2} dominantBaseline="hanging">h</text>
           {days.map((d, i) => {
             const inRange = d >= from && d <= to

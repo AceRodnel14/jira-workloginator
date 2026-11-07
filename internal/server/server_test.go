@@ -323,7 +323,7 @@ func TestSettingsRoundTrip(t *testing.T) {
 	}
 	var got settings.Settings
 	_ = json.NewDecoder(rec.Body).Decode(&got)
-	want := settings.Settings{JiraDomain: "https://acme.atlassian.net", User: "a@b.c", APIEmail: "a@b.c", SameAsUser: true, APIToken: "tok", Timezone: "Asia/Manila", Users: []string{}}
+	want := settings.Settings{JiraDomain: "https://acme.atlassian.net", User: "a@b.c", APIEmail: "a@b.c", SameAsUser: true, APIToken: "tok", Timezone: "Asia/Manila", Users: []string{}, WorkHours: 8}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("got %+v", got)
 	}
@@ -701,5 +701,49 @@ func TestMultiCancelStopsFetch(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 	if n := calls.Load(); n != 1 {
 		t.Errorf("jira calls: %d", n)
+	}
+}
+
+func TestSettingsWorkHours(t *testing.T) {
+	s, _ := newServer(t, nil)
+	if rec := do(s, "GET", "/api/settings", ""); !strings.Contains(rec.Body.String(), `"work_hours":8`) {
+		t.Errorf("default: %s", rec.Body)
+	}
+	bad := strings.Replace(validSettings, `"timezone"`, `"work_hours":13,"timezone"`, 1)
+	rec := do(s, "PUT", "/api/settings", bad)
+	if rec.Code != 400 || !strings.Contains(rec.Body.String(), `{"error":"Work hours per day must be 1 to 12."}`) {
+		t.Errorf("13: %d %s", rec.Code, rec.Body)
+	}
+	ok := strings.Replace(validSettings, `"timezone"`, `"work_hours":6,"timezone"`, 1)
+	if rec := do(s, "PUT", "/api/settings", ok); rec.Code != 204 {
+		t.Fatalf("put 6: %d %s", rec.Code, rec.Body)
+	}
+	if rec := do(s, "GET", "/api/settings", ""); !strings.Contains(rec.Body.String(), `"work_hours":6`) {
+		t.Errorf("saved: %s", rec.Body)
+	}
+	zero := strings.Replace(validSettings, `"timezone"`, `"work_hours":0,"timezone"`, 1)
+	do(s, "PUT", "/api/settings", zero)
+	if rec := do(s, "GET", "/api/settings", ""); !strings.Contains(rec.Body.String(), `"work_hours":8`) {
+		t.Errorf("zero: %s", rec.Body)
+	}
+}
+
+func TestSettingsOldFileLoadsWorkHours(t *testing.T) {
+	s, cfg := newServer(t, nil)
+	old := `{"jira_domain":"https://acme.atlassian.net","user":"a@b.c","api_email":"a@b.c","same_as_user":true,"api_token":"tok","timezone":"Asia/Manila"}`
+	if err := os.WriteFile(cfg.JSONPath, []byte(old), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if rec := do(s, "GET", "/api/settings", ""); !strings.Contains(rec.Body.String(), `"work_hours":8`) {
+		t.Errorf("old file: %s", rec.Body)
+	}
+}
+
+func TestWorklogsWorkHoursRange(t *testing.T) {
+	calls := 0
+	s, _ := newServer(t, nil, WithJiraClient(fakeJira(t, func(http.ResponseWriter, *http.Request) { calls++ })))
+	bad := strings.Replace(worklogBody, `"timezone"`, `"work_hours":13,"timezone"`, 1)
+	if rec := do(s, "POST", "/api/worklogs", bad); rec.Code != 400 || calls != 0 {
+		t.Errorf("13: %d calls=%d %s", rec.Code, calls, rec.Body)
 	}
 }

@@ -47,10 +47,10 @@ export function weekSeconds(byDay: Map<string, Entry[]>, days: string[]): number
   return days.reduce((t, d) => t + (byDay.get(d) ?? []).reduce((a, e) => a + e.seconds, 0), 0)
 }
 
-/** y-axis maximum in hours: max(busiest day, 8) + 2. */
-export function yMax(byDay: Map<string, Entry[]>, days: string[]): number {
+/** y-axis maximum in hours: max(busiest day, reference line) + 2. */
+export function yMax(byDay: Map<string, Entry[]>, days: string[], refHours = 8): number {
   const busiest = Math.max(0, ...days.map((d) => hours(weekSeconds(byDay, [d]))))
-  return Math.max(busiest, 8) + 2
+  return Math.max(busiest, refHours) + 2
 }
 
 // Validated categorical palette (dataviz skill, light + dark validated). Fixed order.

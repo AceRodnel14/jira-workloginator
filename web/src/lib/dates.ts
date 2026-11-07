@@ -23,6 +23,16 @@ export function monthDefaults(now: Date = new Date()): { from: string; to: strin
   return { from: `${y}-${pad(m + 1)}-01`, to: `${y}-${pad(m + 1)}-${pad(last)}` }
 }
 
+/** Today's date in the local calendar (never isoDate(new Date()), which is UTC). */
+export function localToday(now: Date = new Date()): string {
+  return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`
+}
+
+/** Week to show first: the one containing today when today is inside the range, else the first week of the range. */
+export function initialMonday(from: string, to: string, today: string = localToday()): string {
+  return mondayOf(from <= today && today <= to ? today : from)
+}
+
 /** Monday on or before the given day. */
 export function mondayOf(s: string): string {
   const dow = (parseISO(s)!.getUTCDay() + 6) % 7 // Mon=0
